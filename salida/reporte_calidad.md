@@ -26,12 +26,13 @@ Excluidos a proposito de la serie:
 | Mediciones leidas | 61 |
 | Mediciones con estructura correcta | 61 (100%) |
 | Hallazgos criticos | 3 |
-| Advertencias | 1 |
+| Advertencias | 2 |
 | Mediciones buenas | 59 |
 | Mediciones degradadas | 1 |
 | Mediciones imputadas | 1 |
 | Bins de espectro revisados | 62464 |
 | Bins NaN, infinitos o fuera de [-140, 0] dBm | 0 |
+| Mediciones con piso de ruido anomalo | 1 |
 
 ### Hallazgos detallados
 
@@ -40,9 +41,16 @@ Excluidos a proposito de la serie:
 | `008.txt` | gps | critico | latitud/longitud en 0.0 (sin fix) |
 | `008.txt` | hdop | advertencia | error de distancia 4.4 (degradado) |
 | `008.txt` | altura | critico | altura 0.0 m fuera de rango |
+| `016.txt` | piso_ruido | advertencia | piso de ruido -37.0 dBm, 35.6 dB sobre el tipico de la campana (-72.6 dBm): posible saturacion del receptor |
 | `017.txt` | hdop | critico | error de distancia 17.3 (inutilizable) |
 
-El espectro esta integro: de los 62464 valores de potencia revisados, ninguno resulto NaN, infinito ni fuera del rango fisico del receptor. Los defectos se concentran exclusivamente en la georreferenciacion.
+El espectro esta integro: de los 62464 valores de potencia revisados, ninguno resulto NaN, infinito ni fuera del rango fisico del receptor.
+
+### Piso de ruido anomalo
+
+Integro no significa representativo. El piso de ruido de cada medicion (percentil 10 de sus 1024 bins) se ubica tipicamente en -72.6 dBm, pero `016.txt` lo tiene en -37.0 dBm: mas de 30 dB por encima (un factor superior a 1000 en potencia). La siguiente medicion mas alta, `024.txt`, queda a +21.8 dB, de modo que el umbral separa un caso aislado y no una cola de la distribucion.
+
+Un receptor que barre 20 MHz siempre encuentra tramos en silencio; que no haya ninguno es la firma de un front-end saturado por un emisor muy cercano. La medicion **no se corrige ni se descarta**: su posicion es buena y su espectro es energia real en ese punto, por lo que sigue contando en la ocupacion por canal. Lo que no puede es dominar los estadisticos del sistema; por eso la frecuencia mas contaminada se determina con la mediana entre mediciones (seccion 7). Queda marcada en la columna `anomalia_espectral` de `indicadores.csv`.
 
 ## 3. Tecnicas de imputacion
 
@@ -175,22 +183,42 @@ Orden de contaminacion, de mayor a menor: **C > B > D > A**.
 
 ## 7. Frecuencias extremas del sistema
 
-| | Bin | Frecuencia | Potencia promedio |
-|---|---|---|---|
-| Mas contaminada | 600 | **851.7188 MHz** | -21.38 dBm |
-| Menos contaminada | 214 | **844.1797 MHz** | -57.45 dBm |
+| | Bin | Frecuencia | Canal | Potencia mediana | Mediciones sobre -60 dBm |
+|---|---|---|---|---|---|
+| Mas contaminada | 673 | **853.1445 MHz** | C | -41.67 dBm | 91.8% |
+| Menos contaminada | 185 | **843.6133 MHz** | A | -72.59 dBm | 19.7% |
 
-Diferencia entre ambas: **36.07 dB**.
+Diferencia entre ambas: **30.92 dB**.
 
 ![Frecuencias extremas del sistema](graficas/01_frecuencias_extremas.png)
 
-*Figura 1. Perfil promedio de la banda con ambas frecuencias senaladas y detalle ampliado de cada una. Generada por `graficas.py`.*
+*Figura 1. Perfil mediano de la banda con ambas frecuencias senaladas y detalle ampliado de cada una. Generada por `graficas.py`.*
 
-El maximo no es un bin aislado: alrededor de 851.7188 MHz hay un lobulo continuo de unos **645 kHz** dentro de los 3 dB del pico, compatible con una portadora real y no con un artefacto de la FFT (tramo contiguo 851.3867 - 852.0117 MHz).
+### Por que la mediana entre mediciones
+
+Dentro de cada espectro la potencia se integra en lineal (Parseval, seccion 6). Para agregar **entre ubicaciones** la pregunta es otra: que frecuencia esta contaminada en todo el sistema, no en un punto. La media lineal entre las 61 mediciones no responde eso, porque la domina la medicion mas fuerte:
+
+| Criterio | Frecuencia mas contaminada | Observacion |
+|---|---|---|
+| Media lineal entre mediciones (descartado) | 851.7188 MHz | `016.txt` aporta el 97% de la energia de ese bin; su mediana es -50.6 dBm |
+| **Mediana entre mediciones** | **853.1445 MHz** | Sobre el umbral en el 91.8% del recorrido |
+
+La eleccion es estable: al repetir el calculo quitando cada medicion una vez, la mediana senala 853.1445 MHz en 61 de 61 casos. La media lineal, en cambio, cambia de frecuencia con solo retirar `016.txt`.
+
+El maximo no es un bin aislado: forma parte de un bloque continuo de unos **1523 kHz** (851.7969 - 853.3008 MHz) que se mantiene dentro de los 10 dB del pico, un ancho del orden de una portadora celular y no de un artefacto de la FFT.
 
 ### Descarte de artefactos del receptor
 
-El USRP introduce un offset de DC en su frecuencia central, que en esta campana es 850 MHz (bin 512) y cae justo en la frontera entre los canales B y C. Se verifico ese bin: marca -36.97 dBm, alineado con sus vecinos inmediatos, **sin pico de DC**. La ocupacion elevada del canal C es por tanto energia real del aire y no un artefacto instrumental.
+El USRP introduce un offset de DC en su frecuencia central, que en esta campana es 850 MHz (bin 512) y cae justo en la frontera entre los canales B y C. Se midio cuanto sobresale ese bin sobre sus vecinos a +-2 bins en cada medicion: la mediana es **+2.75 dB**, frente a +0.36 dB para el percentil 99 del resto de la banda.
+
+**Hay un pico de DC**: un realce de unos 9 bins (849.922 - 850.078 MHz) centrado en 850 MHz. Para medir su efecto se reemplazo ese tramo por una recta entre sus bordes y se recalculo la ocupacion:
+
+| Canal | Mediciones ocupadas | Sin el pico de DC |
+|---|---|---|
+| B | 20 | 20 |
+| C | 53 | 52 |
+
+El efecto es marginal y no cambia el orden de los canales, asi que el espectro se conserva sin modificar. La ocupacion del canal C es energia real del aire y no un artefacto instrumental.
 
 ## 8. Recomendacion tecnica para la ANE
 
@@ -198,8 +226,8 @@ Con base en la potencia integrada por Parseval sobre 61 puntos de medicion en el
 
 - **No asignar el canal C (850 - 855 MHz).** Es el bloque mas contaminado de la banda: -28.15 dBm de potencia media y ocupacion en el 86.9% del recorrido. Cualquier asignacion nueva aqui enfrentaria interferencia co-canal en practicamente toda el area cubierta.
 - **Priorizar el canal A (840 - 845 MHz).** Es el mas limpio: -46.38 dBm de potencia media y solo 24.6% de puntos por encima del umbral. Es la mejor opcion para un despliegue nuevo.
-- **Evitar la vecindad de 851.7188 MHz** en cualquier plan de frecuencias: es la portadora dominante de toda la banda, 36.07 dB por encima del punto mas limpio del espectro.
-- **Reservar 844.1797 MHz como referencia de piso de ruido** para futuras campanas de monitoreo en el sector.
+- **Evitar la vecindad de 853.1445 MHz** en cualquier plan de frecuencias: es la frecuencia mas contaminada del sistema, sobre el umbral en el 91.8% del recorrido y 30.92 dB por encima del punto mas limpio del espectro.
+- **Tomar 843.6133 MHz como referencia de piso de ruido** para futuras campanas de monitoreo en el sector: su mediana es -72.59 dBm y solo supera el umbral en el 19.7% de los puntos.
 
 ### Limitaciones del estudio
 
