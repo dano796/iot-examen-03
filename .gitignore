@@ -1,0 +1,22 @@
+# Entorno virtual
+.venv/
+
+# Bytecode de Python
+__pycache__/
+*.pyc
+
+# Arreglos intermedios del ETL: los regenera `python3 etl.py`
+salida/*.npy
+
+# HTML intermedio del informe: pesa ~10 MB por las imagenes embebidas
+# y lo regenera `informe.py` junto con el PDF
+salida/Informe_Examen03.html
+
+# Bytecode heredado del material original del examen
+medidas_2026_20/*.pyc
+
+# Enunciado del examen: material del docente, no se versiona
+Examen*.pdf
+
+# Entregable final: lo regenera `informe.py`
+salida/Informe_Examen03.pdf

@@ -1,0 +1,15 @@
+# El ETL y la estimacion de fuentes corren solo con numpy.
+numpy==2.5.3
+
+# Dashboard interactivo
+dash==4.4.1
+plotly==7.1.0
+pandas==3.0.6
+scipy==1.18.1
+
+# Graficas estaticas del informe
+matplotlib==3.11.2
+
+# Ensamblado del PDF y capturas del dashboard
+Markdown==3.10.3
+playwright==1.63.0
