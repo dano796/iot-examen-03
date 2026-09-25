@@ -74,8 +74,8 @@ python3 etl.py
 
 | Archivo | Contenido |
 |---|---|
-| `salida/Informe_Examen03.pdf` | Entregable final, 20 paginas |
-| `salida/reporte_calidad.md` | Informe en Markdown, 10 secciones |
+| `salida/Informe_Examen03.pdf` | Entregable final, 15 paginas |
+| `salida/reporte_calidad.md` | Informe en Markdown: resumen, 7 secciones y bonificacion |
 | `salida/indicadores.csv` | 61 mediciones x 21 columnas |
 | `salida/fuentes_estimadas.csv` | Estimacion de origen por canal |
 | `salida/graficas/` | Figuras 1 a 4 del informe |

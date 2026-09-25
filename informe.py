@@ -237,7 +237,7 @@ def main():
         print("Falta %s. Corre primero `python3 etl.py`." % RUTA_MD)
         return 1
 
-    with open(RUTA_MD) as fo:
+    with open(RUTA_MD, encoding="utf-8") as fo:
         md = fo.read()
 
     # El titulo H1 del Markdown lo reemplaza la portada.
