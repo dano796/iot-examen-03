@@ -74,7 +74,7 @@ def cargar():
         d["ocupado_%s" % c] = np.array([int(f["ocupado_%s" % c]) for f in filas])
     d["espectro"] = np.load(os.path.join(CARPETA_SALIDA, "espectro_limpio.npy"))
     d["frecuencias"] = np.load(os.path.join(CARPETA_SALIDA, "frecuencias_hz.npy"))
-    d["perfil"] = np.load(os.path.join(CARPETA_SALIDA, "perfil_promedio_dbm.npy"))
+    d["perfil"] = np.load(os.path.join(CARPETA_SALIDA, "perfil_mediano_dbm.npy"))
     d["bin_peor"] = int(np.argmax(d["perfil"]))
     d["bin_mejor"] = int(np.argmin(d["perfil"]))
     return d
@@ -116,7 +116,7 @@ def figura_frecuencias_extremas(d):
                 color="#555")
 
     ax.plot(frec, perfil, color=COLOR_PERFIL, linewidth=0.9,
-            label="Perfil promedio de las %d mediciones" % len(d["archivo"]))
+            label="Perfil mediano de las %d mediciones" % len(d["archivo"]))
     ax.axhline(UMBRAL_OCUPACION_DBM, color=COLOR_UMBRAL, linestyle="--",
                linewidth=1.2,
                label="Umbral de ocupacion (%.0f dBm)" % UMBRAL_OCUPACION_DBM)
@@ -137,8 +137,8 @@ def figura_frecuencias_extremas(d):
     ax.set_xlim(frec[0], frec[-1])
     ax.set_ylim(perfil.min() - 15, perfil.max() + 6)
     ax.set_xlabel("Frecuencia (MHz)")
-    ax.set_ylabel("Potencia promedio (dBm)")
-    ax.set_title("Ocupacion promedio de la banda 840 - 860 MHz")
+    ax.set_ylabel("Potencia mediana (dBm)")
+    ax.set_title("Ocupacion tipica de la banda 840 - 860 MHz (mediana por frecuencia)")
     ax.legend(loc="lower center", ncol=2, fontsize=8.5,
               framealpha=0.95, borderpad=0.7)
 

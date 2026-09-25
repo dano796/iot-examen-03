@@ -19,8 +19,9 @@ un dashboard web que visualiza los resultados sobre el mapa de la ciudad.
 | **C** | **850 - 855 MHz** | **-28.15 dBm** | **86.9 %** |
 | D | 855 - 860 MHz | -44.46 dBm | 29.5 % |
 
-Canal mas contaminado: **C**. Canal mas limpio: **A**. Frecuencia dominante
-de toda la banda: **851.719 MHz** a -21.4 dBm.
+Canal mas contaminado: **C**. Canal mas limpio: **A**. Frecuencia mas
+contaminada del sistema: **853.145 MHz** (mediana -41.7 dBm, sobre el umbral
+en el 91.8 % del recorrido); la mas limpia: **843.613 MHz** (-72.6 dBm).
 
 ## Estructura
 
@@ -97,6 +98,14 @@ medicion-canal.
 interpolacion lineal entre sus vecinos, con un error maximo de +-0.630 km.
 `017.txt` tiene posicion imprecisa (HDOP 17.3) pero valida, asi que se marca
 como degradada y no se toca. Ningun valor de espectro fue alterado.
+
+**Frecuencias extremas por mediana.** Parseval se aplica dentro de cada
+espectro; para agregar entre las 61 ubicaciones se usa la mediana por bin.
+La media lineal la domina una sola medicion: `016.txt` tiene el piso de
+ruido 35.6 dB sobre el tipico (posible saturacion del receptor) y aporta el
+97 % de la energia del bin que esa media senalaba (851.719 MHz). La mediana
+senala 853.145 MHz en 61 de 61 pruebas quitando una medicion cada vez.
+`016.txt` no se descarta: se marca en la columna `anomalia_espectral`.
 
 **Estimacion de fuentes.** La trilateracion log-distancia resulta no
 concluyente en los cuatro canales (mejor R^2 = 0.154, con pendiente negativa
