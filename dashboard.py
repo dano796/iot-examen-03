@@ -52,7 +52,7 @@ def cargar():
 
     datos["espectro"] = np.load(os.path.join(CARPETA_SALIDA, "espectro_limpio.npy"))
     datos["frecuencias"] = np.load(os.path.join(CARPETA_SALIDA, "frecuencias_hz.npy"))
-    datos["perfil"] = np.load(os.path.join(CARPETA_SALIDA, "perfil_promedio_dbm.npy"))
+    datos["perfil"] = np.load(os.path.join(CARPETA_SALIDA, "perfil_mediano_dbm.npy"))
 
     # Bin mas y menos contaminado de todo el sistema.
     datos["bin_peor"] = int(np.argmax(datos["perfil"]))
@@ -121,8 +121,9 @@ CAPAS = {
         etiqueta="Frecuencia mas contaminada del sistema", variable="p_pico",
         unidad="dBm", escala="Inferno", escala_fija=False,
         explicacion="Potencia recibida unicamente en el bin de 19.53 kHz mas "
-                    "contaminado de toda la banda. Muestra donde se siente "
-                    "con mas fuerza la portadora dominante.", leyenda=None),
+                    "contaminado de toda la banda (mayor mediana entre las "
+                    "mediciones). Muestra donde se siente con mas fuerza.",
+        leyenda=None),
 }
 
 # Rango comun de color para los cuatro canales.
@@ -244,7 +245,7 @@ def figura_espectro(indice):
                       annotation_font_size=14)
 
     fig.add_trace(go.Scatter(
-        x=frec, y=D["perfil"], mode="lines", name="Perfil promedio",
+        x=frec, y=D["perfil"], mode="lines", name="Perfil mediano",
         line=dict(color=COLOR_TENUE, width=1, dash="dot")))
 
     if indice is not None:
@@ -415,10 +416,11 @@ app.layout = html.Div([
                 "Solo %.1f%% de los puntos superan el umbral. Es la mejor "
                 "opcion para un despliegue nuevo." % ocupacion[mejor_canal]),
         tarjeta("Frecuencia pico", "%.3f MHz" % frec_pico,
-                "%.1f dBm promedio" % D["perfil"][D["bin_peor"]],
-                "La portadora dominante de toda la banda. La mas limpia "
+                "%.1f dBm mediana" % D["perfil"][D["bin_peor"]],
+                "Supera el umbral en el %.1f%% del recorrido. La mas limpia "
                 "esta en %.3f MHz (%.1f dBm)."
-                % (frec_limpia, D["perfil"][D["bin_mejor"]])),
+                % (100.0 * np.mean(D["p_pico"] > UMBRAL_OCUPACION_DBM),
+                   frec_limpia, D["perfil"][D["bin_mejor"]])),
         tarjeta("Calidad del dataset",
                 "%d / %d" % (D["calidad"].count("buena"), len(D["lat"])),
                 "mediciones sin defectos",
@@ -533,7 +535,7 @@ app.layout = html.Div([
             "Espectro completo: potencia en cada frecuencia",
             "Eje X: las 1024 frecuencias medidas, de 840 a 860 MHz. "
             "Eje Y: cuanta potencia hay en cada una. La linea punteada gris "
-            "es el promedio de las %d mediciones; al hacer clic en el mapa se "
+            "es la mediana de las %d mediciones; al hacer clic en el mapa se "
             "superpone en azul el espectro de ese punto. Las cuatro franjas "
             "de color son los canales A, B, C y D, y la linea roja el umbral "
             "de %.0f dBm por encima del cual un canal se considera ocupado."

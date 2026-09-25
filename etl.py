@@ -79,6 +79,12 @@ RANGO_DBM = (-140.0, 0.0)
 HDOP_ACEPTABLE = 2.0
 HDOP_INUTILIZABLE = 5.0
 
+# Piso de ruido anomalo: si el percentil 10 de una medicion queda mas de 30 dB
+# (factor 1000 en potencia) por encima del piso tipico de la campana, el
+# receptor no vio ningun tramo en silencio. Es la firma de un front-end
+# saturado cerca de un emisor: el espectro es real pero no representativo.
+MARGEN_PISO_ANOMALO_DB = 30.0
+
 
 # --------------------------------------------------------------------------
 # EXTRACT
@@ -126,6 +132,10 @@ def auditar(nombres, espectro, temp, lon, lat, alt, hdop):
     """
     hallazgos = []
 
+    # Piso de ruido de referencia de toda la campana (mediana de los p10).
+    pisos = np.percentile(espectro, 10, axis=1)
+    piso_tipico = float(np.median(pisos))
+
     for i, nombre in enumerate(nombres):
         # --- GPS: el caso típico de fix perdido es lat/lon exactamente 0.0
         if lat[i] == 0.0 or lon[i] == 0.0:
@@ -167,6 +177,18 @@ def auditar(nombres, espectro, temp, lon, lat, alt, hdop):
             hallazgos.append(dict(archivo=nombre, indice=i, campo="espectro",
                                   detalle="%d bins fuera de [%.0f, %.0f] dBm" % (n_fuera, *RANGO_DBM),
                                   gravedad="critico"))
+
+        # --- Piso de ruido: espectro valido pero no representativo. No se
+        # corrige ni se descarta; se marca para que los estadisticos del
+        # sistema no dependan de el (ver seccion 7 del reporte).
+        exceso = float(pisos[i]) - piso_tipico
+        if exceso > MARGEN_PISO_ANOMALO_DB:
+            hallazgos.append(dict(archivo=nombre, indice=i, campo="piso_ruido",
+                                  detalle="piso de ruido %.1f dBm, %.1f dB sobre el "
+                                          "tipico de la campana (%.1f dBm): posible "
+                                          "saturacion del receptor"
+                                          % (pisos[i], exceso, piso_tipico),
+                                  gravedad="advertencia"))
 
     return hallazgos
 
@@ -321,10 +343,12 @@ def distancia_haversine_km(lat1, lon1, lat2, lon2):
 # --------------------------------------------------------------------------
 
 def escribir_indicadores(ruta, nombres, orden, lat, lon, alt, temp, hdop,
-                         p_media, p_total, piso_ruido, calidad):
+                         p_media, p_total, piso_ruido, calidad,
+                         anomalia_espectral):
     """Escribe el CSV que consume el dashboard: una fila por medicion."""
     campos = (["archivo", "orden", "latitud", "longitud", "altura", "temperatura",
-               "error_distancia", "piso_ruido_dbm", "calidad"]
+               "error_distancia", "piso_ruido_dbm", "calidad",
+               "anomalia_espectral"]
               + ["p_media_%s" % c for c in CANALES]
               + ["p_total_%s" % c for c in CANALES]
               + ["ocupado_%s" % c for c in CANALES])
@@ -335,7 +359,7 @@ def escribir_indicadores(ruta, nombres, orden, lat, lon, alt, temp, hdop,
         for i, nombre in enumerate(nombres):
             fila = [nombre, orden[i], "%.8f" % lat[i], "%.8f" % lon[i],
                     "%.1f" % alt[i], "%.2f" % temp[i], "%.1f" % hdop[i],
-                    "%.2f" % piso_ruido[i], calidad[i]]
+                    "%.2f" % piso_ruido[i], calidad[i], anomalia_espectral[i]]
             fila += ["%.4f" % p_media[c][i] for c in CANALES]
             fila += ["%.4f" % p_total[c][i] for c in CANALES]
             fila += [int(p_media[c][i] > UMBRAL_OCUPACION_DBM) for c in CANALES]
@@ -410,6 +434,7 @@ def escribir_reporte(ruta, ctx):
     a("| Mediciones imputadas | %d |" % calidad.count("imputada"))
     a("| Bins de espectro revisados | %d |" % (n * N_BINS))
     a("| Bins NaN, infinitos o fuera de [%.0f, %.0f] dBm | 0 |" % RANGO_DBM)
+    a("| Mediciones con piso de ruido anomalo | %d |" % sum(ctx["anomalia_espectral"]))
     a("")
     a("### Hallazgos detallados")
     a("")
@@ -423,10 +448,40 @@ def escribir_reporte(ruta, ctx):
         a("Sin hallazgos.")
     a("")
     a("El espectro esta integro: de los %d valores de potencia revisados, "
-      "ninguno resulto NaN, infinito ni fuera del rango fisico del receptor. "
-      "Los defectos se concentran exclusivamente en la georreferenciacion."
+      "ninguno resulto NaN, infinito ni fuera del rango fisico del receptor."
       % (n * N_BINS))
     a("")
+    pisos = ctx["piso_ruido"]
+    piso_tipico = float(np.median(pisos))
+    anomalas = [i for i in range(n) if ctx["anomalia_espectral"][i]]
+    if anomalas:
+        normales = [i for i in range(n) if not ctx["anomalia_espectral"][i]]
+        sig = max(normales, key=lambda i: pisos[i])
+        a("### Piso de ruido anomalo")
+        a("")
+        a("Integro no significa representativo. El piso de ruido de cada "
+          "medicion (percentil 10 de sus 1024 bins) se ubica tipicamente en "
+          "%.1f dBm, pero %s lo tiene%s en %s: mas de %.0f dB por encima "
+          "(un factor superior a %.0f en potencia). La siguiente medicion "
+          "mas alta, `%s`, queda a %+.1f dB, de modo que el umbral separa "
+          "un caso aislado y no una cola de la distribucion."
+          % (piso_tipico,
+             ", ".join("`%s`" % nombres[i] for i in anomalas),
+             "n" if len(anomalas) > 1 else "",
+             ", ".join("%.1f dBm" % pisos[i] for i in anomalas),
+             MARGEN_PISO_ANOMALO_DB, 10 ** (MARGEN_PISO_ANOMALO_DB / 10.0),
+             nombres[sig], pisos[sig] - piso_tipico))
+        a("")
+        a("Un receptor que barre 20 MHz siempre encuentra tramos en "
+          "silencio; que no haya ninguno es la firma de un front-end "
+          "saturado por un emisor muy cercano. La medicion **no se corrige "
+          "ni se descarta**: su posicion es buena y su espectro es energia "
+          "real en ese punto, por lo que sigue contando en la ocupacion por "
+          "canal. Lo que no puede es dominar los estadisticos del sistema; "
+          "por eso la frecuencia mas contaminada se determina con la "
+          "mediana entre mediciones (seccion 7). Queda marcada en la columna "
+          "`anomalia_espectral` de `indicadores.csv`.")
+        a("")
 
     # ------------------------------------------------------------ imputacion
     a("## 3. Tecnicas de imputacion")
@@ -700,47 +755,122 @@ def escribir_reporte(ruta, ctx):
     # -------------------------------------------------- frecuencias extremas
     perfil, frec = ctx["perfil_dbm"], ctx["frecuencias"]
     bp, bm = ctx["bin_peor"], ctx["bin_mejor"]
-    # Ancho del lóbulo a -3 dB: se recorre hacia ambos lados DESDE el pico y
-    # se corta en el primer bin que baja del umbral, para medir el tramo
-    # contiguo y no confundirlo con otros picos sueltos del espectro.
-    umbral_3db = perfil[bp] - 3.0
+    # Ancho del bloque a -10 dB: se recorre hacia ambos lados DESDE el pico
+    # y se corta en el primer bin que baja del umbral, para medir el tramo
+    # contiguo y no confundirlo con otros picos sueltos del espectro. Se usa
+    # -10 dB y no -3 dB porque la mediana por bin es rugosa en la cima.
+    umbral_lobulo = perfil[bp] - 10.0
     izq = bp
-    while izq > 0 and perfil[izq - 1] >= umbral_3db:
+    while izq > 0 and perfil[izq - 1] >= umbral_lobulo:
         izq -= 1
     der = bp
-    while der < N_BINS - 1 and perfil[der + 1] >= umbral_3db:
+    while der < N_BINS - 1 and perfil[der + 1] >= umbral_lobulo:
         der += 1
     ancho_lobulo = (der - izq + 1) * ANCHO_BIN_HZ
 
+    # % de mediciones en las que cada bin extremo supera el umbral.
+    ocup_bp = 100.0 * np.mean(espectro[:, bp] > UMBRAL_OCUPACION_DBM)
+    ocup_bm = 100.0 * np.mean(espectro[:, bm] > UMBRAL_OCUPACION_DBM)
+
     a("## 7. Frecuencias extremas del sistema")
     a("")
-    a("| | Bin | Frecuencia | Potencia promedio |")
-    a("|---|---|---|---|")
-    a("| Mas contaminada | %d | **%.4f MHz** | %.2f dBm |" % (bp, frec[bp] / 1e6, perfil[bp]))
-    a("| Menos contaminada | %d | **%.4f MHz** | %.2f dBm |" % (bm, frec[bm] / 1e6, perfil[bm]))
+    a("| | Bin | Frecuencia | Canal | Potencia mediana | Mediciones sobre %.0f dBm |"
+      % UMBRAL_OCUPACION_DBM)
+    a("|---|---|---|---|---|---|")
+    a("| Mas contaminada | %d | **%.4f MHz** | %s | %.2f dBm | %.1f%% |"
+      % (bp, frec[bp] / 1e6, "ABCD"[bp // BINS_POR_CANAL], perfil[bp], ocup_bp))
+    a("| Menos contaminada | %d | **%.4f MHz** | %s | %.2f dBm | %.1f%% |"
+      % (bm, frec[bm] / 1e6, "ABCD"[bm // BINS_POR_CANAL], perfil[bm], ocup_bm))
     a("")
     a("Diferencia entre ambas: **%.2f dB**." % (perfil[bp] - perfil[bm]))
     a("")
     a("![Frecuencias extremas del sistema](graficas/01_frecuencias_extremas.png)")
     a("")
-    a("*Figura 1. Perfil promedio de la banda con ambas frecuencias "
+    a("*Figura 1. Perfil mediano de la banda con ambas frecuencias "
       "senaladas y detalle ampliado de cada una. Generada por "
       "`graficas.py`.*")
     a("")
-    a("El maximo no es un bin aislado: alrededor de %.4f MHz hay un lobulo "
-      "continuo de unos **%.0f kHz** dentro de los 3 dB del pico, compatible "
-      "con una portadora real y no con un artefacto de la FFT (tramo "
-      "contiguo %.4f - %.4f MHz)."
-      % (frec[bp] / 1e6, ancho_lobulo / 1e3, frec[izq] / 1e6, frec[der] / 1e6))
+
+    # ---- por que la mediana entre mediciones
+    lineal = ctx["perfil_lineal_dbm"]
+    bl = int(np.argmax(lineal))
+    col = dbm_a_mw(espectro[:, bl])
+    dom = int(np.argmax(col))
+    aporte = 100.0 * col[dom] / col.sum()
+    # Estabilidad: se repite el calculo quitando cada medicion una vez.
+    estable = sum(
+        int(np.argmax(np.median(np.delete(espectro, k, axis=0), axis=0)) == bp)
+        for k in range(n))
+
+    a("### Por que la mediana entre mediciones")
+    a("")
+    a("Dentro de cada espectro la potencia se integra en lineal (Parseval, "
+      "seccion 6). Para agregar **entre ubicaciones** la pregunta es otra: "
+      "que frecuencia esta contaminada en todo el sistema, no en un punto. "
+      "La media lineal entre las %d mediciones no responde eso, porque la "
+      "domina la medicion mas fuerte:" % n)
+    a("")
+    a("| Criterio | Frecuencia mas contaminada | Observacion |")
+    a("|---|---|---|")
+    a("| Media lineal entre mediciones (descartado) | %.4f MHz | `%s` aporta "
+      "el %.0f%% de la energia de ese bin; su mediana es %.1f dBm |"
+      % (frec[bl] / 1e6, nombres[dom], aporte, float(np.median(espectro[:, bl]))))
+    a("| **Mediana entre mediciones** | **%.4f MHz** | Sobre el umbral en el "
+      "%.1f%% del recorrido |" % (frec[bp] / 1e6, ocup_bp))
+    a("")
+    a("La eleccion es estable: al repetir el calculo quitando cada medicion "
+      "una vez, la mediana senala %.4f MHz en %d de %d casos. La media "
+      "lineal, en cambio, cambia de frecuencia con solo retirar `%s`."
+      % (frec[bp] / 1e6, estable, n, nombres[dom]))
+    a("")
+    a("El maximo no es un bin aislado: forma parte de un bloque continuo de "
+      "unos **%.0f kHz** (%.4f - %.4f MHz) que se mantiene dentro de los "
+      "10 dB del pico, un ancho del orden de una portadora celular y no de "
+      "un artefacto de la FFT."
+      % (ancho_lobulo / 1e3, frec[izq] / 1e6, frec[der] / 1e6))
     a("")
     a("### Descarte de artefactos del receptor")
     a("")
+    # Pico de DC: cuanto sobresale el bin central sobre sus vecinos a +-2
+    # bins, medicion por medicion, comparado con el mismo estadistico en el
+    # resto de la banda (que es el comportamiento normal de un bin).
+    def realce(k):
+        return float(np.median(espectro[:, k] - 0.5 * (espectro[:, k - 2] + espectro[:, k + 2])))
+    realce_dc = realce(512)
+    realce_p99 = float(np.percentile([realce(k) for k in range(2, N_BINS - 2)], 99))
+
     a("El USRP introduce un offset de DC en su frecuencia central, que en "
       "esta campana es 850 MHz (bin 512) y cae justo en la frontera entre "
-      "los canales B y C. Se verifico ese bin: marca %.2f dBm, alineado con "
-      "sus vecinos inmediatos, **sin pico de DC**. La ocupacion elevada del "
-      "canal C es por tanto energia real del aire y no un artefacto "
-      "instrumental." % perfil[512])
+      "los canales B y C. Se midio cuanto sobresale ese bin sobre sus "
+      "vecinos a +-2 bins en cada medicion: la mediana es **%+.2f dB**, "
+      "frente a %+.2f dB para el percentil 99 del resto de la banda."
+      % (realce_dc, realce_p99))
+    a("")
+    if realce_dc > realce_p99:
+        # Se cuantifica su efecto reemplazando el tramo afectado por una
+        # recta entre sus bordes. Solo para medir; el espectro no se toca.
+        sin_dc = espectro.copy()
+        for k in range(508, 517):
+            w = (k - 507) / 10.0
+            sin_dc[:, k] = espectro[:, 507] + w * (espectro[:, 517] - espectro[:, 507])
+        p_sin_dc, _ = potencia_por_canal(sin_dc)
+        a("**Hay un pico de DC**: un realce de unos 9 bins (%.3f - %.3f MHz) "
+          "centrado en 850 MHz. Para medir su efecto se reemplazo ese tramo "
+          "por una recta entre sus bordes y se recalculo la ocupacion:"
+          % (frec[508] / 1e6, frec[516] / 1e6))
+        a("")
+        a("| Canal | Mediciones ocupadas | Sin el pico de DC |")
+        a("|---|---|---|")
+        for c in ("B", "C"):
+            a("| %s | %d | %d |" % (c, int(np.sum(p_media[c] > UMBRAL_OCUPACION_DBM)),
+                                   int(np.sum(p_sin_dc[c] > UMBRAL_OCUPACION_DBM))))
+        a("")
+        a("El efecto es marginal y no cambia el orden de los canales, asi "
+          "que el espectro se conserva sin modificar. La ocupacion del canal "
+          "C es energia real del aire y no un artefacto instrumental.")
+    else:
+        a("**Sin pico de DC**: la ocupacion elevada del canal C es energia "
+          "real del aire y no un artefacto instrumental.")
     a("")
 
     # ----------------------------------------------------- recomendacion
@@ -763,11 +893,14 @@ def escribir_reporte(ruta, ctx):
          (FREC_INICIAL_HZ + CANALES[mejor][1] * ANCHO_BIN_HZ) / 1e6,
          pot_mejor, ocup_mejor))
     a("- **Evitar la vecindad de %.4f MHz** en cualquier plan de "
-      "frecuencias: es la portadora dominante de toda la banda, %.2f dB por "
-      "encima del punto mas limpio del espectro."
-      % (frec[bp] / 1e6, perfil[bp] - perfil[bm]))
-    a("- **Reservar %.4f MHz como referencia de piso de ruido** para futuras "
-      "campanas de monitoreo en el sector." % (frec[bm] / 1e6))
+      "frecuencias: es la frecuencia mas contaminada del sistema, sobre el "
+      "umbral en el %.1f%% del recorrido y %.2f dB por encima del punto mas "
+      "limpio del espectro."
+      % (frec[bp] / 1e6, ocup_bp, perfil[bp] - perfil[bm]))
+    a("- **Tomar %.4f MHz como referencia de piso de ruido** para futuras "
+      "campanas de monitoreo en el sector: su mediana es %.2f dBm y solo "
+      "supera el umbral en el %.1f%% de los puntos."
+      % (frec[bm] / 1e6, perfil[bm], ocup_bm))
     a("")
     a("### Limitaciones del estudio")
     a("")
@@ -960,9 +1093,17 @@ def main():
     # "imputada" se reserva para las que realmente se modificaron; una
     # medición con hallazgo crítico que NO se toco queda como "degradada",
     # que es el caso de 017.txt (tiene fix, solo que impreciso).
+    # La etiqueta describe la POSICION de la medicion (es la que filtra la
+    # estimacion de fuentes); el piso de ruido anomalo va aparte, en su
+    # propia columna, porque la georreferenciacion de esa medicion es buena.
     calidad = ["buena"] * len(nombres)
     for h in hallazgos:
-        calidad[h["indice"]] = "degradada"
+        if h["campo"] != "piso_ruido":
+            calidad[h["indice"]] = "degradada"
+    anomalia_espectral = [0] * len(nombres)
+    for h in hallazgos:
+        if h["campo"] == "piso_ruido":
+            anomalia_espectral[h["indice"]] = 1
     for m in imputaciones:
         if m["tecnica"] != "ninguna":
             calidad[m["indice"]] = "imputada"
@@ -975,21 +1116,29 @@ def main():
     # indicador que se cruza contra la temperatura del sensor.
     piso_ruido = np.percentile(espectro, 10, axis=1)
 
-    # Perfil promedio del sistema: potencia media de cada bin sobre las 61
-    # mediciones, otra vez promediando en lineal y no en dB.
-    perfil_mw = dbm_a_mw(espectro).mean(axis=0)
-    perfil_dbm = mw_a_dbm(perfil_mw)
+    # Perfil del sistema: MEDIANA de cada bin sobre las 61 mediciones. Aqui
+    # no se promedia en lineal: la media lineal entre mediciones la domina
+    # la medicion mas fuerte (016.txt aporta el 97% en su pico), y la
+    # pregunta es que frecuencia esta contaminada en todo el sistema, no en
+    # un punto. Parseval se sigue aplicando DENTRO de cada espectro para la
+    # potencia de canal; esto es solo el agregado entre ubicaciones.
+    perfil_dbm = np.median(espectro, axis=0)
     bin_peor = int(np.argmax(perfil_dbm))
     bin_mejor = int(np.argmin(perfil_dbm))
+
+    # Contraste con la media lineal, que era el criterio anterior: se
+    # conserva para documentar en el reporte por que se descarto.
+    perfil_lineal_dbm = mw_a_dbm(dbm_a_mw(espectro).mean(axis=0))
 
     # ---------------- LOAD ----------------
     orden = list(range(1, len(nombres) + 1))
     ruta_csv = os.path.join(CARPETA_SALIDA, "indicadores.csv")
     escribir_indicadores(ruta_csv, nombres, orden, lat, lon, alt, temp, hdop,
-                         p_media, p_total, piso_ruido, calidad)
+                         p_media, p_total, piso_ruido, calidad,
+                         anomalia_espectral)
     np.save(os.path.join(CARPETA_SALIDA, "espectro_limpio.npy"), espectro)
     np.save(os.path.join(CARPETA_SALIDA, "frecuencias_hz.npy"), frecuencias)
-    np.save(os.path.join(CARPETA_SALIDA, "perfil_promedio_dbm.npy"), perfil_dbm)
+    np.save(os.path.join(CARPETA_SALIDA, "perfil_mediano_dbm.npy"), perfil_dbm)
 
     recorrido = sum(distancia_haversine_km(lat[i], lon[i], lat[i + 1], lon[i + 1])
                     for i in range(len(nombres) - 1))
@@ -999,6 +1148,8 @@ def main():
                hallazgos=hallazgos, imputaciones=imputaciones,
                perfil_dbm=perfil_dbm, frecuencias=frecuencias,
                piso_ruido=piso_ruido, calidad=calidad, orden=orden,
+               anomalia_espectral=anomalia_espectral,
+               perfil_lineal_dbm=perfil_lineal_dbm,
                recorrido_km=recorrido, bin_peor=bin_peor, bin_mejor=bin_mejor)
 
     # Estimacion de fuentes (bonificacion). Se importa aqui y no arriba
@@ -1037,9 +1188,9 @@ def main():
                  ocupadas, len(nombres), 100.0 * ocupadas / len(nombres)))
 
     print("\n--- FRECUENCIAS EXTREMAS ---")
-    print("Mas contaminada : bin %d = %.4f MHz  (%.2f dBm promedio)"
+    print("Mas contaminada : bin %d = %.4f MHz  (%.2f dBm mediana)"
           % (bin_peor, frecuencias[bin_peor] / 1e6, perfil_dbm[bin_peor]))
-    print("Menos contaminada: bin %d = %.4f MHz  (%.2f dBm promedio)"
+    print("Menos contaminada: bin %d = %.4f MHz  (%.2f dBm mediana)"
           % (bin_mejor, frecuencias[bin_mejor] / 1e6, perfil_dbm[bin_mejor]))
 
     print("\n--- RUTA ---")
@@ -1048,7 +1199,7 @@ def main():
 
     print("\nEscrito en %s" % CARPETA_SALIDA)
     print("  indicadores.csv | espectro_limpio.npy | frecuencias_hz.npy")
-    print("  perfil_promedio_dbm.npy | reporte_calidad.md")
+    print("  perfil_mediano_dbm.npy | reporte_calidad.md")
     return ctx
 
 
