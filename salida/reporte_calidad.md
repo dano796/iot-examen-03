@@ -50,7 +50,18 @@ El espectro esta integro: de los 62464 valores de potencia revisados, ninguno re
 
 Integro no significa representativo. El piso de ruido de cada medicion (percentil 10 de sus 1024 bins) se ubica tipicamente en -72.6 dBm, pero `016.txt` lo tiene en -37.0 dBm: mas de 30 dB por encima (un factor superior a 1000 en potencia). La siguiente medicion mas alta, `024.txt`, queda a +21.8 dB, de modo que el umbral separa un caso aislado y no una cola de la distribucion.
 
-Un receptor que barre 20 MHz siempre encuentra tramos en silencio; que no haya ninguno es la firma de un front-end saturado por un emisor muy cercano. La medicion **no se corrige ni se descarta**: su posicion es buena y su espectro es energia real en ese punto, por lo que sigue contando en la ocupacion por canal. Lo que no puede es dominar los estadisticos del sistema; por eso la frecuencia mas contaminada se determina con la mediana entre mediciones (seccion 7). Queda marcada en la columna `anomalia_espectral` de `indicadores.csv`.
+Un receptor que barre 20 MHz siempre encuentra tramos en silencio; que no haya ninguno es la firma de un front-end saturado por un emisor muy cercano.
+
+**Verificacion en campo.** Junto a las dos zonas de mayor potencia del recorrido hay estaciones base celulares, identificadas en Google Street View:
+
+| Estacion base | Coordenadas | Medicion mas cercana | Distancia | Piso sobre el tipico | Siguiente medicion |
+|---|---|---|---|---|---|
+| Guayabal | 6.201370, -75.584742 | `016.txt` | **35 m** | +35.6 dB | `017.txt` a 282 m |
+| Sur | 6.168150, -75.608361 | `024.txt` | **288 m** | +21.8 dB | `025.txt` a 469 m |
+
+El receptor opero con ganancia fija de 40 dB (`medir_celular.py`), sin control automatico. Al pasar al pie de la antena de Guayabal el front-end se saturo: eso explica el piso de `016.txt` y que sea un caso aislado, porque ninguna otra medicion paso tan cerca de una estacion. A la antena Sur el recorrido solo se acerco a 288 m (`024.txt`): el piso sube +21.8 dB pero queda bajo el umbral, crece y decrece de forma gradual con las mediciones vecinas y la medicion es valida.
+
+La medicion **no se corrige ni se descarta**: su posicion es buena y registra un hecho real, un emisor a pocos metros, que ademas es la mejor evidencia disponible para ubicar la fuente (seccion 9). Pero sus valores de potencia estan inflados por la saturacion y no pueden dominar los estadisticos del sistema; por eso la frecuencia mas contaminada se determina con la mediana entre mediciones (seccion 7), y su efecto sobre la potencia media global se cuantifica en la seccion 6. Queda marcada en la columna `anomalia_espectral` de `indicadores.csv`.
 
 ## 3. Tecnicas de imputacion
 
@@ -171,6 +182,8 @@ Con la potencia media 1 de los 4 canales resulta ocupado; con la total, 4 de 4. 
 | **C** | 850 - 855 MHz | -28.15 dBm | -11.33 dBm | 53 / 61 | 86.9% |
 | **D** | 855 - 860 MHz | -44.46 dBm | -28.50 dBm | 18 / 61 | 29.5% |
 
+**Nota sobre la potencia media global.** Es una media lineal entre mediciones, y en ella pesa mucho la medicion saturada `016.txt` (seccion 2). Sin ella: canal A de -46.38 a -57.97 dBm; canal C de -28.15 a -34.82 dBm; canal D de -44.46 a -48.90 dBm. El orden de los canales no cambia (C > B > D > A) y la ocupacion, que cuenta mediciones en lugar de sumar energia, no depende de este efecto.
+
 **Canal mas contaminado: C.** Con -28.15 dBm de potencia media esta 18.2 dB por encima del canal mas limpio y supera el umbral de ocupacion en el 86.9% del recorrido.
 
 **Canal menos contaminado: A.** Potencia media de -46.38 dBm y solo 24.6% de mediciones por encima del umbral.
@@ -266,7 +279,7 @@ La cuarta columna refuerza el diagnostico. Al liberar la restriccion sobre la pe
 
 Causas identificadas:
 
-1. **No hay un emisor, hay decenas.** Una banda celular la sirven multiples estaciones base repartidas por la ciudad; el campo agregado no decae desde un punto unico.
+1. **No hay un emisor, hay varios.** Una banda celular la sirven multiples estaciones base repartidas por la ciudad; el campo agregado no decae desde un punto unico. En este recorrido se identificaron 2 estaciones base, separadas 4.52 km (ver la validacion del metodo 2).
 2. **La geometria del muestreo es degenerada.** El recorrido es practicamente un corredor lineal a lo largo del valle, y para trilaterar se requiere observar la fuente desde angulos diversos.
 3. **El sombreado urbano domina la senal de distancia.** La potencia de un mismo canal varia mas de 61 dB entre los puntos del recorrido, un rango atribuible a edificaciones y topografia que enmascara por completo la atenuacion por distancia.
 
@@ -285,7 +298,36 @@ Esto **no localiza un transmisor**: delimita la zona de maxima incidencia, es de
 
 **Validacion.** Para descartar que el centroide sea un artefacto del promedio se calculo tambien el centroide del decil *inferior* de cada canal. Ambos quedan separados entre 2.03 y 3.69 km, lo que confirma la existencia de un gradiente espacial real: las mediciones fuertes y las debiles no estan mezcladas, ocupan zonas distintas del recorrido.
 
-Las cuatro zonas convergen en un area comun del sur del corredor (latitud 6.181 a 6.200, longitud -75.592 a -75.585), lo que sugiere un foco de emision compartido para toda la banda antes que emisores independientes por canal.
+### Validacion con estaciones base reales
+
+Las dos estaciones base identificadas en campo (seccion 2) permiten contrastar los centros estimados contra emisores reales:
+
+| Canal | Centro estimado | A estacion Guayabal | A estacion Sur | Lectura |
+|---|---|---|---|---|
+| **A** | 6.20005, -75.58513 | 0.15 km | 4.38 km | apunta a Guayabal |
+| **B** | 6.18115, -75.59215 | 2.39 km | 2.30 km | entre ambas: mezcla los dos emisores |
+| **C** | 6.19512, -75.58824 | 0.80 km | 3.73 km | apunta a Guayabal |
+| **D** | 6.19471, -75.58622 | 0.76 km | 3.84 km | apunta a Guayabal |
+
+El centro del canal A queda a **153 m** de la estacion de Guayabal: el metodo, que solo pretendia delimitar una zona, cae practicamente sobre un emisor real. No es casualidad: la medicion que mas pesa en ese centro es `016.txt`, la saturada al pie de la antena (seccion 2).
+
+En el canal B, en cambio, el centro cae entre las dos estaciones, a 2.4 km y 2.3 km de cada una. Ese canal recibe energia comparable de ambas zonas y el promedio las mezcla en un punto donde no hay nada. Es la limitacion del centroide cuando hay mas de un emisor, y la confirmacion directa de la primera causa de falla del metodo 1.
+
+### Sensibilidad al tamano del grupo
+
+El 10% es una convencion; para comprobar que el resultado no depende de ella se repitio el calculo con otros tamanos. La tabla muestra cuanto se desplaza cada centro respecto al obtenido con el 10%:
+
+| Grupo | Mediciones | Canal A | Canal B | Canal C | Canal D |
+|---|---|---|---|---|---|
+| 5% | 3 | 0.03 km | 0.25 km | 0.08 km | 0.52 km |
+| **10%** | 6 | 0.00 km | 0.00 km | 0.00 km | 0.00 km |
+| 15% | 9 | 0.01 km | 0.29 km | 0.03 km | 0.03 km |
+| 20% | 12 | 0.01 km | 0.28 km | 0.05 km | 0.05 km |
+| 25% | 15 | 0.02 km | 0.28 km | 0.06 km | 0.05 km |
+| 33% | 19 | 0.01 km | 0.28 km | 0.06 km | 0.05 km |
+| 50% | 30 | 0.01 km | 0.29 km | 0.07 km | 0.05 km |
+
+Entre el 10% y el 50% ningun centro se mueve mas de **0.29 km**, menos que el radio medio de las zonas (2.07 a 3.02 km). La razon es la ponderacion lineal: una medicion 10 dB mas debil pesa 10 veces menos, asi que ampliar el grupo solo agrega puntos que casi no aportan. Por debajo del 10% (3 mediciones) el centro salta hasta 0.52 km porque depende de un par de puntos. Se usa el 10%: el grupo mas pequeno que no depende de mediciones sueltas. Un grupo pequeno conserva ademas la separacion frente al grupo debil, que se reduce a medida que entran puntos intermedios.
 
 ### Alcance de la estimacion
 
