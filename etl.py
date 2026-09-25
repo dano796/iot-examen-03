@@ -85,6 +85,19 @@ HDOP_INUTILIZABLE = 5.0
 # saturado cerca de un emisor: el espectro es real pero no representativo.
 MARGEN_PISO_ANOMALO_DB = 30.0
 
+# Ganancia del USRP durante la campana, fija (medidas_2026_20/medir_celular.py,
+# set_gain(40)): sin control automatico, un emisor muy cercano satura el
+# front-end en lugar de hacer que el receptor baje su ganancia.
+GANANCIA_RECEPTOR_DB = 40
+
+# Estaciones base identificadas en Google Street View junto a las dos zonas
+# de mayor potencia del recorrido. No salen del dataset: son la verificacion
+# en campo de lo que senalan los datos (secciones 2 y 9 del reporte).
+ESTACIONES_BASE = [
+    dict(nombre="Guayabal", lat=6.201370, lon=-75.584742),
+    dict(nombre="Sur", lat=6.168150, lon=-75.608361),
+]
+
 
 # --------------------------------------------------------------------------
 # EXTRACT
@@ -474,12 +487,46 @@ def escribir_reporte(ruta, ctx):
         a("")
         a("Un receptor que barre 20 MHz siempre encuentra tramos en "
           "silencio; que no haya ninguno es la firma de un front-end "
-          "saturado por un emisor muy cercano. La medicion **no se corrige "
-          "ni se descarta**: su posicion es buena y su espectro es energia "
-          "real en ese punto, por lo que sigue contando en la ocupacion por "
-          "canal. Lo que no puede es dominar los estadisticos del sistema; "
-          "por eso la frecuencia mas contaminada se determina con la "
-          "mediana entre mediciones (seccion 7). Queda marcada en la columna "
+          "saturado por un emisor muy cercano.")
+        a("")
+        a("**Verificacion en campo.** Junto a las dos zonas de mayor "
+          "potencia del recorrido hay estaciones base celulares, "
+          "identificadas en Google Street View:")
+        a("")
+        a("| Estacion base | Coordenadas | Medicion mas cercana | Distancia | Piso sobre el tipico | Siguiente medicion |")
+        a("|---|---|---|---|---|---|")
+        cercania = []
+        for eb in ESTACIONES_BASE:
+            dist = np.array([distancia_haversine_km(eb["lat"], eb["lon"], lat[i], lon[i])
+                             for i in range(n)])
+            i1, i2 = np.argsort(dist)[:2]
+            cercania.append((i1, 1000 * dist[i1]))
+            a("| %s | %.6f, %.6f | `%s` | **%.0f m** | %+.1f dB | `%s` a %.0f m |"
+              % (eb["nombre"], eb["lat"], eb["lon"], nombres[i1],
+                 1000 * dist[i1], pisos[i1] - piso_tipico, nombres[i2],
+                 1000 * dist[i2]))
+        a("")
+        a("El receptor opero con ganancia fija de %d dB (`medir_celular.py`), "
+          "sin control automatico. Al pasar al pie de la antena de Guayabal "
+          "el front-end se saturo: eso explica el piso de %s y que sea un "
+          "caso aislado, porque ninguna otra medicion paso tan cerca de una "
+          "estacion. A la antena Sur el recorrido solo se acerco a %.0f m "
+          "(`%s`): el piso sube %+.1f dB pero queda bajo el umbral, crece y "
+          "decrece de forma gradual con las mediciones vecinas y la medicion "
+          "es valida."
+          % (GANANCIA_RECEPTOR_DB,
+             ", ".join("`%s`" % nombres[i] for i in anomalas),
+             cercania[1][1], nombres[cercania[1][0]],
+             pisos[cercania[1][0]] - piso_tipico))
+        a("")
+        a("La medicion **no se corrige ni se descarta**: su posicion es "
+          "buena y registra un hecho real, un emisor a pocos metros, que "
+          "ademas es la mejor evidencia disponible para ubicar la fuente "
+          "(seccion 9). Pero sus valores de potencia estan inflados por la "
+          "saturacion y no pueden dominar los estadisticos del sistema; por "
+          "eso la frecuencia mas contaminada se determina con la mediana "
+          "entre mediciones (seccion 7), y su efecto sobre la potencia media "
+          "global se cuantifica en la seccion 6. Queda marcada en la columna "
           "`anomalia_espectral` de `indicadores.csv`.")
         a("")
 
@@ -725,6 +772,28 @@ def escribir_reporte(ruta, ctx):
              mw_a_dbm(dbm_a_mw(pm).mean()), pm.max(),
              ocupadas, n, 100.0 * ocupadas / n))
     a("")
+
+    # Efecto de la medicion saturada sobre la media lineal entre mediciones:
+    # se reporta para que la cifra no se lea como la potencia tipica.
+    anom = np.array(ctx["anomalia_espectral"], dtype=bool)
+    if anom.any():
+        glob = lambda v: float(mw_a_dbm(dbm_a_mw(v).mean()))
+        sin_anom = {c: glob(p_media[c][~anom]) for c in CANALES}
+        afectados = [c for c in CANALES if glob(p_media[c]) - sin_anom[c] > 1.0]
+        orden_sin = sorted(CANALES, key=lambda c: sin_anom[c], reverse=True)
+        orden_con = sorted(CANALES, key=lambda c: glob(p_media[c]), reverse=True)
+        if afectados:
+            a("**Nota sobre la potencia media global.** Es una media lineal "
+              "entre mediciones, y en ella pesa mucho la medicion saturada "
+              "%s (seccion 2). Sin ella: %s. El orden de los canales %s "
+              "(%s) y la ocupacion, que cuenta mediciones en lugar de sumar "
+              "energia, no depende de este efecto."
+              % (", ".join("`%s`" % nombres[i] for i in np.where(anom)[0]),
+                 "; ".join("canal %s de %.2f a %.2f dBm"
+                           % (c, glob(p_media[c]), sin_anom[c]) for c in afectados),
+                 "no cambia" if orden_sin == orden_con else "cambia",
+                 " > ".join(orden_sin)))
+            a("")
 
     # ordenar canales por contaminacion
     ranking = sorted(CANALES, key=lambda c: float(dbm_a_mw(p_media[c]).mean()), reverse=True)
@@ -995,9 +1064,14 @@ def escribir_reporte(ruta, ctx):
         a("")
         a("Causas identificadas:")
         a("")
-        a("1. **No hay un emisor, hay decenas.** Una banda celular la sirven "
+        a("1. **No hay un emisor, hay varios.** Una banda celular la sirven "
           "multiples estaciones base repartidas por la ciudad; el campo "
-          "agregado no decae desde un punto unico.")
+          "agregado no decae desde un punto unico. En este recorrido se "
+          "identificaron %d estaciones base, separadas %.2f km (ver la "
+          "validacion del metodo 2)."
+          % (len(ESTACIONES_BASE),
+             distancia_haversine_km(ESTACIONES_BASE[0]["lat"], ESTACIONES_BASE[0]["lon"],
+                                    ESTACIONES_BASE[1]["lat"], ESTACIONES_BASE[1]["lon"])))
         a("2. **La geometria del muestreo es degenerada.** El recorrido es "
           "practicamente un corredor lineal a lo largo del valle, y para "
           "trilaterar se requiere observar la fuente desde angulos "
@@ -1040,12 +1114,89 @@ def escribir_reporte(ruta, ctx):
           "mediciones fuertes y las debiles no estan mezcladas, ocupan "
           "zonas distintas del recorrido." % (sep_min, sep_max))
         a("")
-        a("Las cuatro zonas convergen en un area comun del sur del "
-          "corredor (latitud %.3f a %.3f, longitud %.3f a %.3f), lo que "
-          "sugiere un foco de emision compartido para toda la banda antes "
-          "que emisores independientes por canal."
-          % (min(f["lat"] for f in fuentes), max(f["lat"] for f in fuentes),
-             min(f["lon"] for f in fuentes), max(f["lon"] for f in fuentes)))
+        # ---- validacion contra las estaciones base reales
+        a("### Validacion con estaciones base reales")
+        a("")
+        a("Las dos estaciones base identificadas en campo (seccion 2) "
+          "permiten contrastar los centros estimados contra emisores reales:")
+        a("")
+        a("| Canal | Centro estimado | %s | Lectura |"
+          % " | ".join("A estacion %s" % eb["nombre"] for eb in ESTACIONES_BASE))
+        a("|---|---|%s---|" % ("---|" * len(ESTACIONES_BASE)))
+        for f in fuentes:
+            d = [distancia_haversine_km(eb["lat"], eb["lon"], f["lat"], f["lon"])
+                 for eb in ESTACIONES_BASE]
+            k = int(np.argmin(d))
+            f["_dist_eb"] = d
+            lectura = ("apunta a %s" % ESTACIONES_BASE[k]["nombre"] if d[k] < 1.0
+                       else "entre ambas: mezcla los dos emisores")
+            a("| **%s** | %.5f, %.5f | %s | %s |"
+              % (f["canal"], f["lat"], f["lon"],
+                 " | ".join("%.2f km" % x for x in d), lectura))
+        a("")
+        cerca = sorted(fuentes, key=lambda f: min(f["_dist_eb"]))
+        mezcla = [f for f in fuentes if min(f["_dist_eb"]) >= 1.0]
+        c0 = cerca[0]["canal"]
+        buenas = [i for i in range(n) if ctx["calidad"][i] == "buena"]
+        dominante = max(buenas, key=lambda i: p_media[c0][i])
+        a("El centro del canal %s queda a **%.0f m** de la estacion de %s: "
+          "el metodo, que solo pretendia delimitar una zona, cae practicamente "
+          "sobre un emisor real.%s"
+          % (c0, 1000 * min(cerca[0]["_dist_eb"]),
+             ESTACIONES_BASE[int(np.argmin(cerca[0]["_dist_eb"]))]["nombre"],
+             " No es casualidad: la medicion que mas pesa en ese centro es "
+             "`%s`, la saturada al pie de la antena (seccion 2)." % nombres[dominante]
+             if ctx["anomalia_espectral"][dominante] else ""))
+        a("")
+        if mezcla:
+            a("En el canal %s, en cambio, el centro cae entre las dos "
+              "estaciones, a %s de cada una. Ese canal recibe energia "
+              "comparable de ambas zonas y el promedio las mezcla en un punto "
+              "donde no hay nada. Es la limitacion del centroide cuando hay "
+              "mas de un emisor, y la confirmacion directa de la primera "
+              "causa de falla del metodo 1."
+              % (", ".join(f["canal"] for f in mezcla),
+                 " y ".join("%.1f km" % x for x in mezcla[0]["_dist_eb"])))
+            a("")
+
+        # ---- sensibilidad al tamano del grupo
+        from fuentes import FRACCION_DECIL, zona_incidencia
+        utiles = np.array([q == "buena" for q in ctx["calidad"]])
+        fracciones = (0.05, 0.10, 0.15, 0.20, 0.25, 0.33, 0.50)
+        a("### Sensibilidad al tamano del grupo")
+        a("")
+        a("El 10%% es una convencion; para comprobar que el resultado no "
+          "depende de ella se repitio el calculo con otros tamanos. La "
+          "tabla muestra cuanto se desplaza cada centro respecto al obtenido "
+          "con el %.0f%%:" % (100 * FRACCION_DECIL))
+        a("")
+        a("| Grupo | Mediciones | %s |" % " | ".join("Canal %s" % c for c in CANALES))
+        a("|---|---|%s" % ("---|" * len(CANALES)))
+        movs = {}
+        for fr in fracciones:
+            fila, k = [], None
+            for c in CANALES:
+                args = (lat[utiles], lon[utiles], p_media[c][utiles])
+                ref, z = zona_incidencia(*args), zona_incidencia(*args, fraccion=fr)
+                mov = distancia_haversine_km(ref["lat"], ref["lon"], z["lat"], z["lon"])
+                movs.setdefault(fr, []).append(mov)
+                fila.append("%.2f km" % mov)
+                k = z["n_puntos"]
+            etiqueta = ("**%.0f%%**" if fr == FRACCION_DECIL else "%.0f%%") % (100 * fr)
+            a("| %s | %d | %s |" % (etiqueta, k, " | ".join(fila)))
+        a("")
+        mayores = [m for fr in fracciones if fr > FRACCION_DECIL for m in movs[fr]]
+        a("Entre el 10%% y el 50%% ningun centro se mueve mas de **%.2f km**, "
+          "menos que el radio medio de las zonas (%.2f a %.2f km). La razon "
+          "es la ponderacion lineal: una medicion 10 dB mas debil pesa 10 "
+          "veces menos, asi que ampliar el grupo solo agrega puntos que casi "
+          "no aportan. Por debajo del 10%% (3 mediciones) el centro salta "
+          "hasta %.2f km porque depende de un par de puntos. Se usa el 10%%: "
+          "el grupo mas pequeno que no depende de mediciones sueltas. Un "
+          "grupo pequeno conserva ademas la separacion frente al grupo "
+          "debil, que se reduce a medida que entran puntos intermedios."
+          % (max(mayores), min(f["radio_km"] for f in fuentes),
+             max(f["radio_km"] for f in fuentes), max(movs[fracciones[0]])))
         a("")
         a("### Alcance de la estimacion")
         a("")
