@@ -74,8 +74,8 @@ python3 etl.py
 
 | Archivo | Contenido |
 |---|---|
-| `salida/Informe_Examen03.pdf` | Entregable final, 20 paginas |
-| `salida/reporte_calidad.md` | Informe en Markdown, 10 secciones |
+| `salida/Informe_Examen03.pdf` | Entregable final, 15 paginas |
+| `salida/reporte_calidad.md` | Informe en Markdown: resumen, 7 secciones y bonificacion |
 | `salida/indicadores.csv` | 61 mediciones x 21 columnas |
 | `salida/fuentes_estimadas.csv` | Estimacion de origen por canal |
 | `salida/graficas/` | Figuras 1 a 4 del informe |
@@ -112,3 +112,12 @@ concluyente en los cuatro canales (mejor R^2 = 0.154, con pendiente negativa
 en el canal C). Se reporta ese resultado negativo con su evidencia y se
 entrega en su lugar el centroide ponderado del decil de mayor potencia, que
 delimita una zona de incidencia y no un transmisor.
+
+**Verificacion con estaciones base reales.** Junto a las dos zonas de mayor
+potencia hay estaciones base celulares, ubicadas en Google Street View:
+Guayabal (6.201370, -75.584742), a 35 m de `016.txt`, y Sur (6.168150,
+-75.608361), a 288 m de `024.txt`. Con la ganancia fija de 40 dB del receptor,
+pasar al pie de la de Guayabal satura el front-end: eso explica el piso de
+ruido anomalo de `016.txt`. El centro estimado del canal A queda a 153 m de
+esa antena; el del canal B cae entre las dos, que es la limitacion del
+centroide cuando hay mas de un emisor.

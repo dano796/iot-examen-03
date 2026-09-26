@@ -85,6 +85,19 @@ HDOP_INUTILIZABLE = 5.0
 # saturado cerca de un emisor: el espectro es real pero no representativo.
 MARGEN_PISO_ANOMALO_DB = 30.0
 
+# Ganancia del USRP durante la campana, fija (medidas_2026_20/medir_celular.py,
+# set_gain(40)): sin control automatico, un emisor muy cercano satura el
+# front-end en lugar de hacer que el receptor baje su ganancia.
+GANANCIA_RECEPTOR_DB = 40
+
+# Estaciones base identificadas en Google Street View junto a las dos zonas
+# de mayor potencia del recorrido. No salen del dataset: son la verificacion
+# en campo de lo que senalan los datos (secciones 2 y 9 del reporte).
+ESTACIONES_BASE = [
+    dict(nombre="Guayabal", lat=6.201370, lon=-75.584742),
+    dict(nombre="Sur", lat=6.168150, lon=-75.608361),
+]
+
 
 # --------------------------------------------------------------------------
 # EXTRACT
@@ -367,398 +380,329 @@ def escribir_indicadores(ruta, nombres, orden, lat, lon, alt, temp, hdop,
 
 
 def escribir_reporte(ruta, ctx):
-    """Vuelca el reporte de calidad y de indicadores a Markdown.
+    """Vuelca el informe tecnico a Markdown.
 
     Se genera desde los mismos arreglos que alimentan el CSV, para que el
     informe no pueda desincronizarse de los datos: si cambia un umbral o una
-    regla de imputacion, basta volver a correr el ETL.
+    regla de imputacion, basta volver a correr el ETL. Sigue el orden de los
+    entregables del enunciado y prefiere la prosa a las tablas.
     """
     nombres = ctx["nombres"]
     espectro = ctx["espectro"]
     lat, lon, alt = ctx["lat"], ctx["lon"], ctx["alt"]
     p_media, p_total = ctx["p_media"], ctx["p_total"]
     imputaciones = ctx["imputaciones"]
+    hallazgos = ctx["hallazgos"]
+    calidad = ctx["calidad"]
+    pisos = ctx["piso_ruido"]
+    anom = np.array(ctx["anomalia_espectral"], dtype=bool)
+    perfil, frec = ctx["perfil_dbm"], ctx["frecuencias"]
+    bp, bm = ctx["bin_peor"], ctx["bin_mejor"]
+    fuentes = ctx.get("fuentes")
     n = len(nombres)
     L = []
     a = L.append
 
-    a("# Reporte de calidad e indicadores - Examen 03")
-    a("")
-    a("Banda analizada: **840 - 860 MHz** | Mediciones procesadas: **%d** | "
-      "Recorrido: **%.2f km**" % (n, ctx["recorrido_km"]))
-    a("")
-    a("Generado automaticamente por `etl.py`. Todos los numeros de este "
-      "documento salen de la misma corrida que produce `indicadores.csv`.")
+    def banda(c):
+        ini, fin = CANALES[c]
+        return "%.0f–%.0f MHz" % ((FREC_INICIAL_HZ + ini * ANCHO_BIN_HZ) / 1e6,
+                                  (FREC_INICIAL_HZ + fin * ANCHO_BIN_HZ) / 1e6)
+
+    def glob(v):
+        return float(mw_a_dbm(dbm_a_mw(v).mean()))
+
+    def ocup(c, mascara=None):
+        v = p_media[c] if mascara is None else p_media[c][mascara]
+        return int(np.sum(v > UMBRAL_OCUPACION_DBM))
+
+    ranking = sorted(CANALES, key=lambda c: glob(p_media[c]), reverse=True)
+    peor, mejor = ranking[0], ranking[-1]
+    ocup_bp = 100.0 * np.mean(espectro[:, bp] > UMBRAL_OCUPACION_DBM)
+    ocup_bm = 100.0 * np.mean(espectro[:, bm] > UMBRAL_OCUPACION_DBM)
+    piso_tipico = float(np.median(pisos))
+    anomalas = list(np.where(anom)[0])
+
+    # Estaciones base: medicion mas cercana a cada una.
+    cercania = []
+    for eb in ESTACIONES_BASE:
+        d = np.array([distancia_haversine_km(eb["lat"], eb["lon"], lat[i], lon[i])
+                      for i in range(n)])
+        i1, i2 = np.argsort(d)[:2]
+        cercania.append(dict(eb=eb, i=int(i1), d_m=1000 * d[i1],
+                             j=int(i2), d2_m=1000 * d[i2]))
+
+    a("# Ocupación del espectro 840–860 MHz en el occidente de Medellín")
     a("")
 
-    # ---------------------------------------------------------------- fuente
-    a("## 1. Fuente de datos y alcance")
+    # ------------------------------------------------------------- resumen
+    a("## Resumen")
     a("")
-    a("| Concepto | Valor |")
-    a("|---|---|")
-    a("| Archivos de la serie | `001.txt` .. `061.txt` (%d) |" % n)
-    a("| Columnas por archivo | %d (%d bins de espectro + %d metadatos) |"
-      % (N_COLUMNAS, N_BINS, N_METADATOS))
-    a("| Resolucion espectral | %.2f kHz por bin |" % (ANCHO_BIN_HZ / 1e3))
-    a("| Canales | 4 bloques de 5 MHz = %d bins cada uno |" % BINS_POR_CANAL)
-    a("| Umbral de ocupacion | %.0f dBm |" % UMBRAL_OCUPACION_DBM)
-    a("")
-    a("Excluidos a proposito de la serie:")
-    a("")
-    a("- `medidaprueba.txt` y `medidapureba2.txt`: ensayos del operador; el "
-      "primero tiene longitud, latitud y altura en 0.0 y el segundo una "
-      "temperatura (38.1 C) fuera del rango de la campana. No pertenecen al "
-      "recorrido.")
-    a("- `ANTENNA1.csv`: barrido de perdida de retorno (S11) de la antena "
-      "entre 700 y 950 MHz, tomado con un Agilent N9914A. Es caracterizacion "
-      "del instrumento, no una medicion de espectro; sirve para respaldar la "
-      "validez de la medida en la banda, no para el calculo de ocupacion.")
+    a("Se analizaron %d mediciones de espectro tomadas por una estación móvil "
+      "a lo largo de %.1f km del occidente de Medellín. La banda está "
+      "contaminada de forma desigual: el canal %s (%s) supera el umbral de "
+      "%.0f dBm en el %.0f%% del recorrido y no debe asignarse, mientras que "
+      "el canal %s (%s) es el más limpio, con ocupación en el %.0f%% de los "
+      "puntos, y es el recomendado para nuevas asignaciones. La frecuencia "
+      "más contaminada del sistema es %.3f MHz y la más limpia %.3f MHz. "
+      "Las dos zonas de mayor potencia coinciden con estaciones base "
+      "celulares verificadas en campo."
+      % (n, ctx["recorrido_km"], peor, banda(peor), UMBRAL_OCUPACION_DBM,
+         100.0 * ocup(peor) / n, mejor, banda(mejor), 100.0 * ocup(mejor) / n,
+         frec[bp] / 1e6, frec[bm] / 1e6))
     a("")
 
     # --------------------------------------------------------------- calidad
-    hallazgos = ctx["hallazgos"]
-    criticos = [h for h in hallazgos if h["gravedad"] == "critico"]
-    advertencias = [h for h in hallazgos if h["gravedad"] == "advertencia"]
-    calidad = ctx["calidad"]
+    a("## 1. Calidad de los datos")
+    a("")
+    a("La campaña consta de %d archivos (001.txt a %s), cada uno con %d "
+      "columnas: %d valores de potencia en dBm entre 840 y 860 MHz, a %.2f kHz "
+      "por valor, seguidos de temperatura del sensor, longitud, latitud, "
+      "altura y error de distancia del GPS. Todos tienen la estructura "
+      "correcta y ninguno de los %d valores de potencia es nulo, infinito o "
+      "está fuera del rango físico del receptor. Se dejaron fuera de la serie "
+      "tres archivos que no son mediciones del recorrido: medidaprueba.txt y "
+      "medidapureba2.txt, ensayos del operador con GPS en cero o fuera de la "
+      "ciudad, y ANTENNA1.csv, la caracterización de la antena."
+      % (n, nombres[-1], N_COLUMNAS, N_BINS, ANCHO_BIN_HZ / 1e3, n * N_BINS))
+    a("")
 
-    a("## 2. Reporte de calidad")
+    por_archivo = {}
+    for h in hallazgos:
+        por_archivo.setdefault(h["archivo"], []).append(h)
+    hdop = ctx["hdop"]
+    a("La auditoría encontró problemas en %d mediciones; las otras %d están "
+      "limpias. El error de distancia del GPS, que se interpreta como HDOP, "
+      "tiene una mediana de %.1f en la campaña."
+      % (len(por_archivo), n - len(por_archivo), float(np.median(hdop))))
     a("")
-    a("| Metrica | Valor |")
-    a("|---|---|")
-    a("| Mediciones leidas | %d |" % n)
-    a("| Mediciones con estructura correcta | %d (100%%) |" % n)
-    a("| Hallazgos criticos | %d |" % len(criticos))
-    a("| Advertencias | %d |" % len(advertencias))
-    a("| Mediciones buenas | %d |" % calidad.count("buena"))
-    a("| Mediciones degradadas | %d |" % calidad.count("degradada"))
-    a("| Mediciones imputadas | %d |" % calidad.count("imputada"))
-    a("| Bins de espectro revisados | %d |" % (n * N_BINS))
-    a("| Bins NaN, infinitos o fuera de [%.0f, %.0f] dBm | 0 |" % RANGO_DBM)
-    a("| Mediciones con piso de ruido anomalo | %d |" % sum(ctx["anomalia_espectral"]))
+    for archivo, hs in por_archivo.items():
+        i = nombres.index(archivo)
+        campos = {h["campo"] for h in hs}
+        if "gps" in campos:
+            a("- %s perdió la señal GPS: latitud, longitud y altura llegaron en "
+              "cero. Su espectro es válido, así que se imputó la posición "
+              "(sección 2)." % archivo)
+        elif "piso_ruido" in campos:
+            a("- %s tiene el piso de ruido en %.1f dBm, %.1f dB por encima del "
+              "típico de la campaña (%.1f dBm): no hay ningún tramo de la "
+              "banda en silencio. Se conserva y se marca como anomalía "
+              "espectral." % (archivo, pisos[i], pisos[i] - piso_tipico,
+                              piso_tipico))
+        elif "hdop" in campos:
+            a("- %s tiene error de distancia %.1f, unas %.0f veces el típico. "
+              "Tiene posición, solo que imprecisa, y es coherente con sus "
+              "vecinas en la ruta; se conserva como degradada y se excluye "
+              "únicamente de la estimación de fuentes."
+              % (archivo, hdop[i], hdop[i] / float(np.median(hdop))))
     a("")
-    a("### Hallazgos detallados")
-    a("")
-    if hallazgos:
-        a("| Archivo | Campo | Gravedad | Detalle |")
-        a("|---|---|---|---|")
-        for h in hallazgos:
-            a("| `%s` | %s | %s | %s |"
-              % (h["archivo"], h["campo"], h["gravedad"], h["detalle"]))
-    else:
-        a("Sin hallazgos.")
-    a("")
-    a("El espectro esta integro: de los %d valores de potencia revisados, "
-      "ninguno resulto NaN, infinito ni fuera del rango fisico del receptor."
-      % (n * N_BINS))
-    a("")
-    pisos = ctx["piso_ruido"]
-    piso_tipico = float(np.median(pisos))
-    anomalas = [i for i in range(n) if ctx["anomalia_espectral"][i]]
-    if anomalas:
-        normales = [i for i in range(n) if not ctx["anomalia_espectral"][i]]
-        sig = max(normales, key=lambda i: pisos[i])
-        a("### Piso de ruido anomalo")
+
+    if anomalas and len(cercania) >= 2:
+        g, s = cercania[0], cercania[1]
+        a("La causa del piso anómalo se verificó en campo. En Google Street "
+          "View hay una estación base celular (%.6f, %.6f) a %.0f m de %s; "
+          "ninguna otra medición pasó a menos de %.0f m de ella. El receptor "
+          "operó con ganancia fija de %d dB, sin control automático, y al "
+          "pasar al pie de la antena se saturó. Una segunda estación (%.6f, "
+          "%.6f) queda a %.0f m de %s, la medición con el segundo piso más "
+          "alto (%+.1f dB): allí la señal es fuerte pero el receptor no llegó "
+          "a saturarse y la medición es válida."
+          % (g["eb"]["lat"], g["eb"]["lon"], g["d_m"], nombres[g["i"]],
+             g["d2_m"], GANANCIA_RECEPTOR_DB, s["eb"]["lat"], s["eb"]["lon"],
+             s["d_m"], nombres[s["i"]], pisos[s["i"]] - piso_tipico))
         a("")
-        a("Integro no significa representativo. El piso de ruido de cada "
-          "medicion (percentil 10 de sus 1024 bins) se ubica tipicamente en "
-          "%.1f dBm, pero %s lo tiene%s en %s: mas de %.0f dB por encima "
-          "(un factor superior a %.0f en potencia). La siguiente medicion "
-          "mas alta, `%s`, queda a %+.1f dB, de modo que el umbral separa "
-          "un caso aislado y no una cola de la distribucion."
-          % (piso_tipico,
-             ", ".join("`%s`" % nombres[i] for i in anomalas),
-             "n" if len(anomalas) > 1 else "",
-             ", ".join("%.1f dBm" % pisos[i] for i in anomalas),
-             MARGEN_PISO_ANOMALO_DB, 10 ** (MARGEN_PISO_ANOMALO_DB / 10.0),
-             nombres[sig], pisos[sig] - piso_tipico))
+        a("La medición saturada no se corrige ni se descarta: su posición es "
+          "correcta y registra un hecho real, un emisor a pocos metros. Pero "
+          "sus potencias están infladas, así que no se deja que decida los "
+          "indicadores del sistema: la frecuencia más contaminada se calcula "
+          "con la mediana entre mediciones (sección 6) y su efecto sobre la "
+          "potencia media de los canales se reporta aparte (sección 5).")
         a("")
-        a("Un receptor que barre 20 MHz siempre encuentra tramos en "
-          "silencio; que no haya ninguno es la firma de un front-end "
-          "saturado por un emisor muy cercano. La medicion **no se corrige "
-          "ni se descarta**: su posicion es buena y su espectro es energia "
-          "real en ese punto, por lo que sigue contando en la ocupacion por "
-          "canal. Lo que no puede es dominar los estadisticos del sistema; "
-          "por eso la frecuencia mas contaminada se determina con la "
-          "mediana entre mediciones (seccion 7). Queda marcada en la columna "
-          "`anomalia_espectral` de `indicadores.csv`.")
-        a("")
+
+    n_imp = sum(1 for m in imputaciones if m["tecnica"] != "ninguna")
+    a("En resumen, de las %d mediciones %d quedan como buenas, %d imputada, "
+      "%d degradada y %d marcada por saturación. Se corrigieron %d valores, "
+      "todos de posición; ningún valor de espectro fue modificado."
+      % (n, calidad.count("buena") - len(anomalas), calidad.count("imputada"),
+         calidad.count("degradada"), len(anomalas), 3 * n_imp))
+    a("")
 
     # ------------------------------------------------------------ imputacion
-    a("## 3. Tecnicas de imputacion")
-    a("")
-    a("| Archivo | Campo | Tecnica | Efecto |")
-    a("|---|---|---|---|")
-    for m in imputaciones:
-        a("| `%s` | %s | %s | %s |"
-          % (m["archivo"], m["campo"], m["tecnica"], m["detalle"]))
-    if not imputaciones:
-        a("| - | - | - | sin imputaciones |")
-    a("")
-    a("**Total de datos modificados: %d.** Se tocaron unicamente los campos "
-      "de posicion; ni un solo valor de espectro fue alterado." % len(imputaciones))
-    a("")
-    a("### Por que interpolacion lineal en el GPS")
-    a("")
-    a("La estacion es movil y mide a lo largo de un recorrido continuo, asi "
-      "que la posicion de la medicion k esta acotada por la k-1 y la k+1. La "
-      "interpolacion lineal es la hipotesis mas debil disponible -en el "
-      "sentido estadistico: la que menos supone sobre el fenomeno- porque "
-      "solo asume que el vehiculo transito entre ambos vecinos, sin postular "
-      "ruta, velocidad real ni paradas. Si el hueco cayera en un extremo de "
-      "la serie no habria con que interpolar y la medicion se descartaria.")
-    a("")
-    a("Alternativas consideradas y por que se descartaron:")
-    a("")
-    a("| Alternativa | Que asume | Por que no |")
-    a("|---|---|---|")
-    a("| Descartar la medicion | nada | Sacrifica un espectro integro; el "
-      "defecto estaba en el GPS, no en la radio |")
-    a("| Vecino mas cercano | que el vehiculo no se movio | Introduce un "
-      "error del tamano del espaciado completo entre vecinos |")
-    a("| **Interpolacion lineal** | que transito entre ambos vecinos | "
-      "**Seleccionada**: error acotado y minimo de supuestos |")
-    a("| Spline o curva suave | velocidad y aceleracion continuas | Anade "
-      "supuestos que ningun dato respalda |")
-    a("| Reconstruccion por velocidad real | marcas de tiempo | Inviable: "
-      "los archivos no registran timestamp |")
-    a("")
-    a("### Incertidumbre de la posicion imputada")
-    a("")
     separaciones = np.array([
         distancia_haversine_km(lat[i], lon[i], lat[i + 1], lon[i + 1])
         for i in range(n - 1)])
-    a("El punto real solo puede estar sobre el tramo que une a los dos "
-      "vecinos validos, de modo que el error maximo posible de la "
-      "interpolacion es la mitad de esa separacion:")
+    a("## 2. Técnicas de imputación")
     a("")
-    a("| Archivo | Separacion entre vecinos | Error maximo |")
-    a("|---|---|---|")
     for m in imputaciones:
-        if "separacion_km" in m:
-            a("| `%s` | %.3f km | +-%.3f km |"
-              % (m["archivo"], m["separacion_km"], m["error_max_km"]))
+        if m["tecnica"] == "ninguna":
+            continue
+        i = m["indice"]
+        vecinos = m["tecnica"].split("entre ")[-1]
+        a("Solo se imputó la posición de %s, por interpolación lineal entre "
+          "sus vecinas %s. La estación se desplaza de forma continua y los "
+          "archivos siguen el orden del recorrido, así que el punto perdido "
+          "está necesariamente en el tramo que une a sus vecinas. La posición "
+          "imputada es %.5f, %.5f a %.0f m de altura. El error máximo es la "
+          "mitad de ese tramo, ±%.2f km, del mismo orden que la separación "
+          "típica entre mediciones consecutivas (%.2f km)."
+          % (m["archivo"], vecinos, lat[i], lon[i], alt[i],
+             m["error_max_km"], float(np.median(separaciones))))
+        a("")
+    a("Se eligió la interpolación lineal porque es la que menos supone: "
+      "descartar la medición perdía un espectro válido, el vecino más "
+      "cercano ignora que el vehículo se movió, una curva suave supone "
+      "velocidades que no se conocen y los archivos no traen marca de tiempo "
+      "para reconstruir la velocidad real.")
     a("")
-    a("Como referencia, la separacion tipica entre mediciones consecutivas "
-      "de la campana es de %.3f km (mediana) y %.3f km (maxima). La posicion "
-      "imputada queda por tanto dentro del mismo orden de magnitud que la "
-      "resolucion espacial del muestreo, y no degrada la georreferenciacion "
-      "del conjunto."
-      % (float(np.median(separaciones)), float(separaciones.max())))
-    a("")
-    a("### Por que `017.txt` no se imputa")
-    a("")
-    a("Su error de distancia es 17.3, muy por encima del resto de la campana "
-      "(entre 0.7 y 2.0), pero **tiene fix**: entrega una coordenada real, "
-      "solo que imprecisa. Sobrescribirla por interpolacion destruiria "
-      "informacion valida. Se marca como degradada para que el dashboard "
-      "pueda filtrarla, y su espectro se conserva integro porque la calidad "
-      "de la medida de RF no depende del HDOP.")
-    a("")
+    if anomalas:
+        i = anomalas[0]
+        med_vec = [float(np.median(espectro[k])) for k in (i - 1, i + 1) if 0 <= k < n]
+        a("Las otras dos mediciones con problemas no se imputan. La de HDOP "
+          "alto tiene una posición real y reemplazarla por un promedio "
+          "destruiría información. La saturada tampoco admite imputación: "
+          "sus vecinas en la ruta difieren %.0f dB entre sí aun estando a "
+          "menos de un kilómetro, de modo que un espectro interpolado no "
+          "representaría lo que había en ese punto."
+          % abs(med_vec[0] - med_vec[-1]))
+        a("")
 
     # ------------------------------------------------------------- ruta
-    a("## 4. Ruta de la estacion movil")
+    ini, fin = 0, n - 1
+    sur = int(np.argmin(lat))
+    a("## 3. Ruta de la estación móvil")
     a("")
-    a("| Concepto | Valor |")
-    a("|---|---|")
-    a("| Recorrido total | %.2f km |" % ctx["recorrido_km"])
-    a("| Latitud | %.5f a %.5f |" % (lat.min(), lat.max()))
-    a("| Longitud | %.5f a %.5f |" % (lon.min(), lon.max()))
-    a("| Altura | %.1f a %.1f m |" % (alt.min(), alt.max()))
-    a("| Puntos de medicion | %d |" % n)
+    a("El orden de los archivos es el orden del recorrido, lo que permite "
+      "reconstruir la ruta sin marcas de tiempo. La estación hizo un "
+      "circuito de %.1f km: salió del norte del sector (%s, %.5f, %.5f), "
+      "bajó hasta el punto más al sur en %s (%.5f, %.5f) y regresó hacia el "
+      "norte por un trazado más oriental hasta %s. La altura varió entre "
+      "%.0f y %.0f m."
+      % (ctx["recorrido_km"], nombres[ini], lat[ini], lon[ini], nombres[sur],
+         lat[sur], lon[sur], nombres[fin], alt.min(), alt.max()))
     a("")
-    a("El orden alfabetico de los archivos (`001` -> `061`) es tambien el "
-      "orden cronologico del recorrido, lo que permite reconstruir la "
-      "trayectoria como una polilinea sin necesidad de marca de tiempo.")
+    a("![Recorrido de la estación móvil](graficas/04_ruta.png)")
     a("")
-    a("![Recorrido de la estacion movil](graficas/04_ruta.png)")
-    a("")
-    a("*Figura 4. Izquierda: trayectoria con la calidad del dato de cada "
-      "punto. Derecha: el mismo recorrido coloreado por la potencia del "
-      "canal mas contaminado.*")
+    a("*Figura 1. Recorrido con la calidad del dato de cada punto (izquierda) "
+      "y coloreado por la potencia del canal más contaminado (derecha).*")
     a("")
 
     # ------------------------------------------------------ temperatura
-    temp, piso = ctx["temp"], ctx["piso_ruido"]
-    r_piso = correlacion(temp, piso)
+    temp = ctx["temp"]
+    r_piso = correlacion(temp, pisos)
     r_orden = correlacion(temp, ctx["orden"])
-    r_hdop = correlacion(temp, ctx["hdop"])
-
-    a("## 5. Incidencia de la temperatura del sensor")
+    r_hdop = correlacion(temp, hdop)
+    a("## 4. Incidencia de la temperatura del sensor")
     a("")
-    a("Rango observado: **%.2f a %.2f C**." % (temp.min(), temp.max()))
-    a("")
-    a("| Correlacion de Pearson | r | Lectura |")
-    a("|---|---|---|")
-    a("| Temperatura vs orden de medicion | %+.3f | %s |"
-      % (r_orden, "fuerte" if abs(r_orden) > 0.7 else "moderada"))
-    a("| Temperatura vs piso de ruido (p10) | %+.3f | %s |"
-      % (r_piso, "debil" if abs(r_piso) < 0.4 else "moderada"))
-    a("| Temperatura vs error de distancia | %+.3f | despreciable |" % r_hdop)
-    a("")
-    a("**Conclusion.** La temperatura no es una variable ambiental sino el "
-      "calentamiento progresivo del propio equipo: su correlacion dominante "
-      "es con el orden de la medicion (r = %+.3f), es decir, sube "
-      "monotonamente a medida que avanza la campana. Su incidencia sobre la "
-      "calidad del dato es **debil**: contra el piso de ruido da r = %+.3f, "
-      "lo que sugiere una leve elevacion del ruido termico del receptor "
-      "conforme se calienta, pero no alcanza a comprometer las mediciones. "
-      "Sobre la precision del GPS no tiene efecto alguno (r = %+.3f). No se "
-      "descarta ninguna medicion por temperatura."
-      % (r_orden, r_piso, r_hdop))
+    a("La temperatura del sensor subió de %.1f a %.1f °C durante la campaña, "
+      "casi en línea recta con el avance del recorrido (correlación de "
+      "%+.2f con el orden de las mediciones). Es el calentamiento del propio "
+      "equipo, no una variable ambiental. Su relación con la calidad del "
+      "dato es débil: contra el piso de ruido la correlación es %+.2f, "
+      "compatible con un leve aumento del ruido térmico del receptor, y "
+      "contra el error del GPS es %+.2f, es decir, ninguna. La temperatura "
+      "no compromete las mediciones y no se descartó ninguna por esta causa."
+      % (temp.min(), temp.max(), r_orden, r_piso, r_hdop))
     a("")
     a("![Incidencia de la temperatura](graficas/03_temperatura.png)")
     a("")
-    a("*Figura 3. Izquierda: la temperatura sube de forma monotona con el "
-      "avance de la jornada. Derecha: su relacion con el piso de ruido es "
-      "debil; el color indica el orden de la medicion.*")
+    a("*Figura 2. Evolución de la temperatura durante la campaña (izquierda) "
+      "y su relación con el piso de ruido (derecha).*")
     a("")
 
-    # -------------------------------------------------------- indicadores
-    a("## 6. Ocupacion por canal (Parseval discreto)")
-    a("")
-    a("### Metodo")
-    a("")
-    a("Parseval establece que la energia de la senal es la suma de |X[k]|^2 "
-      "sobre los bins de la FFT. Como el espectro viene en dBm por bin:")
-    a("")
-    a("1. **dBm -> mW** (`10^(dBm/10)`). Los dB son logaritmos: promediarlos "
-      "directamente da la media geometrica y subestima cualquier canal con "
-      "picos.")
-    a("2. **Sumar los %d bins** del bloque de 5 MHz -> potencia total del canal."
-      % BINS_POR_CANAL)
-    a("3. **Dividir entre %d** -> potencia media de ocupacion." % BINS_POR_CANAL)
-    a("4. **Volver a dBm** para comparar contra el umbral de %.0f dBm."
-      % UMBRAL_OCUPACION_DBM)
-    a("")
-    a("### Por que no se promedian los dBm directamente")
-    a("")
-    a("Los dB son logaritmos, y el promedio de logaritmos es la media "
-      "**geometrica**, no la aritmetica. Aplicado a potencias eso subestima "
-      "sistematicamente cualquier canal que tenga picos: un bin con mucha "
-      "senal queda compensado por los bins en silencio, cuando fisicamente "
-      "la potencia que llega a la antena es la **suma** de ambas y esta "
-      "dominada por la fuerte.")
-    a("")
-    # Se cuantifica el impacto real sobre este dataset y se ilustra con el
-    # caso donde la clasificacion efectivamente cambia de un metodo al otro,
-    # que es lo que demuestra que la distincion no es academica.
-    cambios = []
-    for c, (ini, fin) in CANALES.items():
-        ingenuo = espectro[:, ini:fin].mean(axis=1)          # promedio de dBm
-        correcto = p_media[c]                                # Parseval
-        for k in range(len(nombres)):
-            if ingenuo[k] <= UMBRAL_OCUPACION_DBM < correcto[k]:
-                cambios.append((float(correcto[k] - ingenuo[k]), nombres[k], c,
-                                float(ingenuo[k]), float(correcto[k]),
-                                float(espectro[k, ini:fin].min()),
-                                float(espectro[k, ini:fin].max())))
-    total_comb = len(nombres) * len(CANALES)
-    cambios.sort(reverse=True)
-
-    a("El impacto sobre este dataset es medible: de las %d combinaciones "
-      "medicion-canal, **%d (%.1f%%) cambian de clasificacion** segun el "
-      "metodo empleado. Todas en el mismo sentido: el promedio ingenuo las "
-      "declara libres y Parseval las declara ocupadas."
-      % (total_comb, len(cambios), 100.0 * len(cambios) / total_comb))
-    a("")
-    if cambios:
-        dif, arch, canal_ej, ingenuo_v, correcto_v, mn, mx = cambios[0]
-        a("Caso mas marcado, `%s` en el canal %s (sus bins van de %.1f a "
-          "%.1f dBm):" % (arch, canal_ej, mn, mx))
-        a("")
-        a("| Metodo | Resultado | Veredicto |")
-        a("|---|---|---|")
-        a("| Promedio directo de los %d valores en dBm (incorrecto) | %.2f dBm | libre |"
-          % (BINS_POR_CANAL, ingenuo_v))
-        a("| Parseval: a mW, sumar, promediar, volver a dBm (correcto) | %.2f dBm | **ocupado** |"
-          % correcto_v)
-        a("| **Diferencia** | **%.2f dB** | |" % dif)
-        a("")
-        a("Esos %.2f dB equivalen a un factor de %.0f en potencia real. El "
-          "canal contiene un pico de %.1f dBm que el promedio logaritmico "
-          "diluye entre los bins en silencio hasta hacerlo desaparecer bajo "
-          "el umbral. Con el metodo incorrecto se le reportaria a la Agencia "
-          "que esa banda esta disponible cuando no lo esta."
-          % (dif, 10 ** (dif / 10.0), mx))
-        a("")
-    a("### Por que la potencia media y no la total")
-    a("")
+    # -------------------------------------------------------- canales
+    cambios = 0
+    peor_caso = None
+    for c, (i0, i1) in CANALES.items():
+        ingenuo = espectro[:, i0:i1].mean(axis=1)
+        for k in range(n):
+            if ingenuo[k] <= UMBRAL_OCUPACION_DBM < p_media[c][k]:
+                cambios += 1
+                dif = float(p_media[c][k] - ingenuo[k])
+                if peor_caso is None or dif > peor_caso[0]:
+                    peor_caso = (dif, nombres[k], c)
     offset = 10.0 * math.log10(BINS_POR_CANAL)
-    a("Sumar %d bins agrega %.2f dB (`10*log10(%d)`) de offset puramente "
-      "aritmetico: aparece por el hecho de sumar, no por energia presente en "
-      "el aire. Ese offset desplaza a **todos** los canales por igual por "
-      "encima del umbral, con lo que el criterio dejaria de discriminar."
-      % (BINS_POR_CANAL, offset, BINS_POR_CANAL))
+
+    a("## 5. Contaminación por canal")
     a("")
-    ejemplo = 0
-    a("Verificacion sobre `%s`:" % nombres[ejemplo])
+    a("La banda se divide en cuatro canales consecutivos de 5 MHz, de %d "
+      "valores cada uno. La potencia media de cada canal en cada punto se "
+      "calcula con la sumatoria de Parseval: los dBm se pasan a mW, se "
+      "promedian los %d valores y el resultado vuelve a dBm para compararlo "
+      "con el umbral de %.0f dBm. Promediar los dBm directamente daría la "
+      "media geométrica y escondería los picos: con ese atajo, %d de las %d "
+      "combinaciones de medición y canal pasarían de ocupadas a libres%s. "
+      "Se usa la potencia media y no la total porque sumar %d valores añade "
+      "%.0f dB por pura aritmética y dejaría todos los canales por encima del "
+      "umbral."
+      % (BINS_POR_CANAL, BINS_POR_CANAL, UMBRAL_OCUPACION_DBM, cambios,
+         n * len(CANALES),
+         (", y en el peor caso (%s, canal %s) el error llega a %.0f dB"
+          % (peor_caso[1], peor_caso[2], peor_caso[0])) if peor_caso else "",
+         BINS_POR_CANAL, offset))
     a("")
-    a("| Canal | Potencia media | >%.0f dBm | Potencia total | >%.0f dBm |"
-      % (UMBRAL_OCUPACION_DBM, UMBRAL_OCUPACION_DBM))
-    a("|---|---|---|---|---|")
+
+    columna_sin = anom.any()
+    if columna_sin:
+        a("| Canal | Banda | Puntos ocupados | Potencia media | Sin la medición saturada |")
+        a("|---|---|---|---|---|")
+    else:
+        a("| Canal | Banda | Puntos ocupados | Potencia media |")
+        a("|---|---|---|---|")
     for c in CANALES:
-        pm, pt = float(p_media[c][ejemplo]), float(p_total[c][ejemplo])
-        a("| %s | %.2f dBm | %s | %.2f dBm | %s |"
-          % (c, pm, "si" if pm > UMBRAL_OCUPACION_DBM else "**no**",
-             pt, "si" if pt > UMBRAL_OCUPACION_DBM else "**no**"))
-    a("")
-    n_ocup_media = sum(1 for c in CANALES if p_media[c][ejemplo] > UMBRAL_OCUPACION_DBM)
-    n_ocup_total = sum(1 for c in CANALES if p_total[c][ejemplo] > UMBRAL_OCUPACION_DBM)
-    a("Con la potencia media %d de los 4 canales resulta ocupado; con la "
-      "total, %d de 4. La segunda lectura no informa nada utilizable para un "
-      "plan de frecuencias. Por eso el umbral se evalua sobre la potencia "
-      "media, aunque **ambas quedan registradas** en `indicadores.csv` "
-      "(columnas `p_media_A..D` y `p_total_A..D`) para permitir verificar "
-      "este mismo razonamiento."
-      % (n_ocup_media, n_ocup_total))
-    a("")
-    a("### Resultados")
-    a("")
-    a("| Canal | Banda | Potencia media global | Maximo | Mediciones ocupadas | % |")
-    a("|---|---|---|---|---|---|")
-    for canal, (ini, fin) in CANALES.items():
-        pm = p_media[canal]
-        ocupadas = int(np.sum(pm > UMBRAL_OCUPACION_DBM))
-        a("| **%s** | %.0f - %.0f MHz | %.2f dBm | %.2f dBm | %d / %d | %.1f%% |"
-          % (canal, (FREC_INICIAL_HZ + ini * ANCHO_BIN_HZ) / 1e6,
-             (FREC_INICIAL_HZ + fin * ANCHO_BIN_HZ) / 1e6,
-             mw_a_dbm(dbm_a_mw(pm).mean()), pm.max(),
-             ocupadas, n, 100.0 * ocupadas / n))
+        fila = "| %s | %s | %d de %d (%.0f%%) | %.1f dBm |" % (
+            c, banda(c), ocup(c), n, 100.0 * ocup(c) / n, glob(p_media[c]))
+        if columna_sin:
+            fila += " %.1f dBm |" % glob(p_media[c][~anom])
+        a(fila)
     a("")
 
-    # ordenar canales por contaminacion
-    ranking = sorted(CANALES, key=lambda c: float(dbm_a_mw(p_media[c]).mean()), reverse=True)
-    peor, mejor = ranking[0], ranking[-1]
-    pot_peor = mw_a_dbm(dbm_a_mw(p_media[peor]).mean())
-    pot_mejor = mw_a_dbm(dbm_a_mw(p_media[mejor]).mean())
-    ocup_peor = 100.0 * np.sum(p_media[peor] > UMBRAL_OCUPACION_DBM) / n
-    ocup_mejor = 100.0 * np.sum(p_media[mejor] > UMBRAL_OCUPACION_DBM) / n
+    orden_sin = sorted(CANALES, key=lambda c: glob(p_media[c][~anom]), reverse=True)
+    a("El canal %s es el más contaminado: supera el umbral en %d de los %d "
+      "puntos y su potencia media es %.1f dB mayor que la del canal más "
+      "limpio. El canal %s es el menos contaminado, ocupado en %d puntos. El "
+      "orden de mayor a menor es %s."
+      % (peor, ocup(peor), n, glob(p_media[peor]) - glob(p_media[mejor]),
+         mejor, ocup(mejor), ", ".join(ranking)))
+    if columna_sin:
+        a("")
+        a("La potencia media es un promedio lineal entre puntos, y en ella "
+          "pesa mucho la medición saturada. Sin ella el canal %s baja %.1f "
+          "dB, pero el orden de los canales %s y el número de puntos "
+          "ocupados, que es el criterio de decisión, no depende de ese "
+          "efecto."
+          % (max(CANALES, key=lambda c: glob(p_media[c]) - glob(p_media[c][~anom])),
+             max(glob(p_media[c]) - glob(p_media[c][~anom]) for c in CANALES),
+             "se mantiene" if orden_sin == ranking else "cambia"))
+    a("")
 
-    a("**Canal mas contaminado: %s.** Con %.2f dBm de potencia media esta "
-      "%.1f dB por encima del canal mas limpio y supera el umbral de "
-      "ocupacion en el %.1f%% del recorrido."
-      % (peor, pot_peor, pot_peor - pot_mejor, ocup_peor))
+    # Pico de DC del USRP en la frecuencia central (850 MHz, bin 512).
+    def realce(k):
+        return float(np.median(espectro[:, k] - 0.5 * (espectro[:, k - 2] + espectro[:, k + 2])))
+    if realce(512) > float(np.percentile([realce(k) for k in range(2, N_BINS - 2)], 99)):
+        sin_dc = espectro.copy()
+        for k in range(508, 517):
+            w = (k - 507) / 10.0
+            sin_dc[:, k] = espectro[:, 507] + w * (espectro[:, 517] - espectro[:, 507])
+        p_sin_dc, _ = potencia_por_canal(sin_dc)
+        def cambio(c, primero):
+            antes, despues = ocup(c), int(np.sum(p_sin_dc[c] > UMBRAL_OCUPACION_DBM))
+            nombre = "el canal %s" % c if primero else "el %s" % c
+            if antes == despues:
+                return "%s se mantiene en %d" % (nombre, antes)
+            return "%s pasa de %d a %d%s" % (nombre, antes, despues,
+                                            " puntos ocupados" if primero else "")
+        a("Se descartó que la contaminación del canal C sea un artefacto del "
+          "receptor. El USRP deja un pequeño pico en su frecuencia central, "
+          "850 MHz, justo en la frontera entre B y C; al retirarlo, %s y %s. "
+          "El efecto es marginal y el espectro se conserva sin modificar."
+          % (cambio("C", True), cambio("B", False)))
+        a("")
+    a("![Comparación de los cuatro canales](graficas/02_potencia_por_canal.png)")
     a("")
-    a("**Canal menos contaminado: %s.** Potencia media de %.2f dBm y solo "
-      "%.1f%% de mediciones por encima del umbral."
-      % (mejor, pot_mejor, ocup_mejor))
-    a("")
-    a("Orden de contaminacion, de mayor a menor: **%s**." % " > ".join(ranking))
-    a("")
-    a("![Comparacion de los cuatro canales](graficas/02_potencia_por_canal.png)")
-    a("")
-    a("*Figura 2. Izquierda: potencia media por Parseval de cada canal "
-      "frente al umbral. Derecha: dispersion de las %d mediciones y "
-      "porcentaje de puntos ocupados.*" % n)
+    a("*Figura 3. Potencia media de cada canal frente al umbral (izquierda) y "
+      "dispersión de las %d mediciones (derecha).*" % n)
     a("")
 
     # -------------------------------------------------- frecuencias extremas
-    perfil, frec = ctx["perfil_dbm"], ctx["frecuencias"]
-    bp, bm = ctx["bin_peor"], ctx["bin_mejor"]
-    # Ancho del bloque a -10 dB: se recorre hacia ambos lados DESDE el pico
-    # y se corta en el primer bin que baja del umbral, para medir el tramo
-    # contiguo y no confundirlo con otros picos sueltos del espectro. Se usa
-    # -10 dB y no -3 dB porque la mediana por bin es rugosa en la cima.
     umbral_lobulo = perfil[bp] - 10.0
     izq = bp
     while izq > 0 and perfil[izq - 1] >= umbral_lobulo:
@@ -766,304 +710,163 @@ def escribir_reporte(ruta, ctx):
     der = bp
     while der < N_BINS - 1 and perfil[der + 1] >= umbral_lobulo:
         der += 1
-    ancho_lobulo = (der - izq + 1) * ANCHO_BIN_HZ
-
-    # % de mediciones en las que cada bin extremo supera el umbral.
-    ocup_bp = 100.0 * np.mean(espectro[:, bp] > UMBRAL_OCUPACION_DBM)
-    ocup_bm = 100.0 * np.mean(espectro[:, bm] > UMBRAL_OCUPACION_DBM)
-
-    a("## 7. Frecuencias extremas del sistema")
-    a("")
-    a("| | Bin | Frecuencia | Canal | Potencia mediana | Mediciones sobre %.0f dBm |"
-      % UMBRAL_OCUPACION_DBM)
-    a("|---|---|---|---|---|---|")
-    a("| Mas contaminada | %d | **%.4f MHz** | %s | %.2f dBm | %.1f%% |"
-      % (bp, frec[bp] / 1e6, "ABCD"[bp // BINS_POR_CANAL], perfil[bp], ocup_bp))
-    a("| Menos contaminada | %d | **%.4f MHz** | %s | %.2f dBm | %.1f%% |"
-      % (bm, frec[bm] / 1e6, "ABCD"[bm // BINS_POR_CANAL], perfil[bm], ocup_bm))
-    a("")
-    a("Diferencia entre ambas: **%.2f dB**." % (perfil[bp] - perfil[bm]))
-    a("")
-    a("![Frecuencias extremas del sistema](graficas/01_frecuencias_extremas.png)")
-    a("")
-    a("*Figura 1. Perfil mediano de la banda con ambas frecuencias "
-      "senaladas y detalle ampliado de cada una. Generada por "
-      "`graficas.py`.*")
-    a("")
-
-    # ---- por que la mediana entre mediciones
     lineal = ctx["perfil_lineal_dbm"]
     bl = int(np.argmax(lineal))
-    col = dbm_a_mw(espectro[:, bl])
-    dom = int(np.argmax(col))
-    aporte = 100.0 * col[dom] / col.sum()
-    # Estabilidad: se repite el calculo quitando cada medicion una vez.
     estable = sum(
         int(np.argmax(np.median(np.delete(espectro, k, axis=0), axis=0)) == bp)
         for k in range(n))
 
-    a("### Por que la mediana entre mediciones")
+    a("## 6. Frecuencias más y menos contaminadas")
     a("")
-    a("Dentro de cada espectro la potencia se integra en lineal (Parseval, "
-      "seccion 6). Para agregar **entre ubicaciones** la pregunta es otra: "
-      "que frecuencia esta contaminada en todo el sistema, no en un punto. "
-      "La media lineal entre las %d mediciones no responde eso, porque la "
-      "domina la medicion mas fuerte:" % n)
+    a("La frecuencia más contaminada de todo el sistema es %.3f MHz, en el "
+      "canal %s: su potencia mediana es %.1f dBm y supera el umbral en el "
+      "%.0f%% del recorrido. No es un valor aislado sino parte de un bloque "
+      "continuo de unos %.1f MHz (%.2f–%.2f MHz), el ancho típico de una "
+      "portadora celular. La menos contaminada es %.3f MHz, en el canal %s, "
+      "con mediana de %.1f dBm y solo %.0f%% de puntos sobre el umbral. "
+      "Entre ambas hay %.1f dB de diferencia."
+      % (frec[bp] / 1e6, "ABCD"[bp // BINS_POR_CANAL], perfil[bp], ocup_bp,
+         (der - izq + 1) * ANCHO_BIN_HZ / 1e6, frec[izq] / 1e6, frec[der] / 1e6,
+         frec[bm] / 1e6, "ABCD"[bm // BINS_POR_CANAL], perfil[bm], ocup_bm,
+         perfil[bp] - perfil[bm]))
     a("")
-    a("| Criterio | Frecuencia mas contaminada | Observacion |")
-    a("|---|---|---|")
-    a("| Media lineal entre mediciones (descartado) | %.4f MHz | `%s` aporta "
-      "el %.0f%% de la energia de ese bin; su mediana es %.1f dBm |"
-      % (frec[bl] / 1e6, nombres[dom], aporte, float(np.median(espectro[:, bl]))))
-    a("| **Mediana entre mediciones** | **%.4f MHz** | Sobre el umbral en el "
-      "%.1f%% del recorrido |" % (frec[bp] / 1e6, ocup_bp))
+    a("Para comparar frecuencias entre puntos se usa la mediana y no la media, "
+      "porque la pregunta es qué frecuencia está contaminada en todo el "
+      "recorrido y no en un solo lugar. La media la decide la medición "
+      "saturada, que la llevaría a %.3f MHz; la mediana señala la misma "
+      "frecuencia aunque se retire cualquiera de las %d mediciones (%d de %d "
+      "pruebas)." % (frec[bl] / 1e6, n, estable, n))
     a("")
-    a("La eleccion es estable: al repetir el calculo quitando cada medicion "
-      "una vez, la mediana senala %.4f MHz en %d de %d casos. La media "
-      "lineal, en cambio, cambia de frecuencia con solo retirar `%s`."
-      % (frec[bp] / 1e6, estable, n, nombres[dom]))
+    a("![Frecuencias más y menos contaminadas](graficas/01_frecuencias_extremas.png)")
     a("")
-    a("El maximo no es un bin aislado: forma parte de un bloque continuo de "
-      "unos **%.0f kHz** (%.4f - %.4f MHz) que se mantiene dentro de los "
-      "10 dB del pico, un ancho del orden de una portadora celular y no de "
-      "un artefacto de la FFT."
-      % (ancho_lobulo / 1e3, frec[izq] / 1e6, frec[der] / 1e6))
-    a("")
-    a("### Descarte de artefactos del receptor")
-    a("")
-    # Pico de DC: cuanto sobresale el bin central sobre sus vecinos a +-2
-    # bins, medicion por medicion, comparado con el mismo estadistico en el
-    # resto de la banda (que es el comportamiento normal de un bin).
-    def realce(k):
-        return float(np.median(espectro[:, k] - 0.5 * (espectro[:, k - 2] + espectro[:, k + 2])))
-    realce_dc = realce(512)
-    realce_p99 = float(np.percentile([realce(k) for k in range(2, N_BINS - 2)], 99))
-
-    a("El USRP introduce un offset de DC en su frecuencia central, que en "
-      "esta campana es 850 MHz (bin 512) y cae justo en la frontera entre "
-      "los canales B y C. Se midio cuanto sobresale ese bin sobre sus "
-      "vecinos a +-2 bins en cada medicion: la mediana es **%+.2f dB**, "
-      "frente a %+.2f dB para el percentil 99 del resto de la banda."
-      % (realce_dc, realce_p99))
-    a("")
-    if realce_dc > realce_p99:
-        # Se cuantifica su efecto reemplazando el tramo afectado por una
-        # recta entre sus bordes. Solo para medir; el espectro no se toca.
-        sin_dc = espectro.copy()
-        for k in range(508, 517):
-            w = (k - 507) / 10.0
-            sin_dc[:, k] = espectro[:, 507] + w * (espectro[:, 517] - espectro[:, 507])
-        p_sin_dc, _ = potencia_por_canal(sin_dc)
-        a("**Hay un pico de DC**: un realce de unos 9 bins (%.3f - %.3f MHz) "
-          "centrado en 850 MHz. Para medir su efecto se reemplazo ese tramo "
-          "por una recta entre sus bordes y se recalculo la ocupacion:"
-          % (frec[508] / 1e6, frec[516] / 1e6))
-        a("")
-        a("| Canal | Mediciones ocupadas | Sin el pico de DC |")
-        a("|---|---|---|")
-        for c in ("B", "C"):
-            a("| %s | %d | %d |" % (c, int(np.sum(p_media[c] > UMBRAL_OCUPACION_DBM)),
-                                   int(np.sum(p_sin_dc[c] > UMBRAL_OCUPACION_DBM))))
-        a("")
-        a("El efecto es marginal y no cambia el orden de los canales, asi "
-          "que el espectro se conserva sin modificar. La ocupacion del canal "
-          "C es energia real del aire y no un artefacto instrumental.")
-    else:
-        a("**Sin pico de DC**: la ocupacion elevada del canal C es energia "
-          "real del aire y no un artefacto instrumental.")
+    a("*Figura 4. Potencia mediana de la banda con la frecuencia más y la "
+      "menos contaminada señaladas, y el detalle de cada una.*")
     a("")
 
     # ----------------------------------------------------- recomendacion
-    a("## 8. Recomendacion tecnica para la ANE")
+    otros = [c for c in ranking if c not in (peor, mejor)]
+    oc = {c: set(np.where(p_media[c] > UMBRAL_OCUPACION_DBM)[0]) for c in CANALES}
+    a("## 7. Recomendación técnica para la ANE")
     a("")
-    a("Con base en la potencia integrada por Parseval sobre %d puntos de "
-      "medicion en el occidente de Medellin:" % n)
+    a("Con base en la ocupación medida en los %d puntos del recorrido, se "
+      "recomienda a la Agencia:" % n)
     a("")
-    a("- **No asignar el canal %s (%.0f - %.0f MHz).** Es el bloque mas "
-      "contaminado de la banda: %.2f dBm de potencia media y ocupacion en el "
-      "%.1f%% del recorrido. Cualquier asignacion nueva aqui enfrentaria "
-      "interferencia co-canal en practicamente toda el area cubierta."
-      % (peor, (FREC_INICIAL_HZ + CANALES[peor][0] * ANCHO_BIN_HZ) / 1e6,
-         (FREC_INICIAL_HZ + CANALES[peor][1] * ANCHO_BIN_HZ) / 1e6,
-         pot_peor, ocup_peor))
-    a("- **Priorizar el canal %s (%.0f - %.0f MHz).** Es el mas limpio: "
-      "%.2f dBm de potencia media y solo %.1f%% de puntos por encima del "
-      "umbral. Es la mejor opcion para un despliegue nuevo."
-      % (mejor, (FREC_INICIAL_HZ + CANALES[mejor][0] * ANCHO_BIN_HZ) / 1e6,
-         (FREC_INICIAL_HZ + CANALES[mejor][1] * ANCHO_BIN_HZ) / 1e6,
-         pot_mejor, ocup_mejor))
-    a("- **Evitar la vecindad de %.4f MHz** en cualquier plan de "
-      "frecuencias: es la frecuencia mas contaminada del sistema, sobre el "
-      "umbral en el %.1f%% del recorrido y %.2f dB por encima del punto mas "
-      "limpio del espectro."
-      % (frec[bp] / 1e6, ocup_bp, perfil[bp] - perfil[bm]))
-    a("- **Tomar %.4f MHz como referencia de piso de ruido** para futuras "
-      "campanas de monitoreo en el sector: su mediana es %.2f dBm y solo "
-      "supera el umbral en el %.1f%% de los puntos."
-      % (frec[bm] / 1e6, perfil[bm], ocup_bm))
+    a("- **Canal %s (%s): priorizarlo para nuevas asignaciones.** Es el más "
+      "limpio de la banda, ocupado solo en el %.0f%% de los puntos."
+      % (mejor, banda(mejor), 100.0 * ocup(mejor) / n))
+    for c in reversed(otros):
+        es_segundo = c == otros[-1]
+        compartidos = len(oc[c] & oc[[x for x in otros if x != c][0]])
+        if es_segundo:
+            otro = [x for x in otros if x != c][0]
+            a("- **Canal %s (%s): utilizable como segunda opción.** Está "
+              "ocupado en el %.0f%% de los puntos, y %s también lo están en "
+              "el canal %s: ambos responden a los mismos emisores, y en el "
+              "resto del recorrido el canal está libre."
+              % (c, banda(c), 100.0 * ocup(c) / n,
+                 ("todos esos puntos" if compartidos == ocup(c)
+                  else "%d de sus %d puntos ocupados" % (compartidos, ocup(c))),
+                 otro))
+        else:
+            a("- **Canal %s (%s): no recomendado para despliegues nuevos sin "
+              "coordinación.** Está ocupado en el %.0f%% de los puntos, tiene "
+              "la segunda potencia más alta de la banda y limita con el canal "
+              "%s, con riesgo de interferencia de canal adyacente."
+              % (c, banda(c), 100.0 * ocup(c) / n, peor))
+    a("- **Canal %s (%s): no asignar.** Está ocupado en el %.0f%% del "
+      "recorrido; cualquier asignación nueva sufriría interferencia en "
+      "prácticamente toda el área medida."
+      % (peor, banda(peor), 100.0 * ocup(peor) / n))
     a("")
-    a("### Limitaciones del estudio")
-    a("")
-    a("- La campana cubre %.2f km del sector occidental; los resultados no "
-      "son extrapolables al resto del Valle de Aburra sin mediciones "
-      "adicionales." % ctx["recorrido_km"])
-    a("- Las mediciones son instantaneas a lo largo de un recorrido, no un "
-      "monitoreo continuo: no capturan variacion horaria de la ocupacion.")
-    a("- `017.txt` aporta espectro valido pero su posicion tiene un error de "
-      "distancia de 17.3 y no debe usarse para inferencias geograficas finas.")
+    a("Dentro del plan, conviene evitar la vecindad de %.3f MHz y usar %.3f "
+      "MHz como referencia de piso de ruido en futuras campañas. El estudio "
+      "tiene dos límites: cubre %.1f km del occidente de la ciudad y no es "
+      "extrapolable al resto del Valle de Aburrá, y son mediciones puntuales "
+      "a lo largo de un recorrido, que no capturan la variación de la "
+      "ocupación según la hora."
+      % (frec[bp] / 1e6, frec[bm] / 1e6, ctx["recorrido_km"]))
     a("")
 
     # --------------------------------------------------- bonificacion
-    fuentes = ctx.get("fuentes")
     if fuentes:
-        # Import diferido por la misma razon que en main(): fuentes.py
-        # importa constantes de este modulo.
-        from fuentes import N_MIN, PASO_MALLA, R2_CONCLUYENTE
+        from fuentes import FRACCION_DECIL, R2_CONCLUYENTE, zona_incidencia
 
-        a("## 9. Bonificacion: estimacion del origen de la contaminacion")
-        a("")
-        a("Se busca ubicar geograficamente la fuente que contamina cada "
-          "banda. Se aplicaron dos metodos y se reportan ambos, porque el "
-          "primero -el rigurosamente correcto si existiera un unico emisor- "
-          "resulta no concluyente, y ese resultado negativo es en si mismo "
-          "un hallazgo tecnico.")
-        a("")
-
-        # ---- metodo 1
-        a("### Metodo 1: inversion log-distancia (trilateracion)")
-        a("")
-        a("La potencia recibida de un emisor fijo decae segun el modelo "
-          "log-distancia:")
-        a("")
-        a("```")
-        a("P(d) = P0 - 10 * n * log10(d)   =>   P = P0 + n * x,  x = -10*log10(d)")
-        a("```")
-        a("")
-        a("donde `n` es el exponente de perdida de trayecto (2 en espacio "
-          "libre, 2.7 a 4 en entorno urbano). Conocida la posicion del "
-          "emisor, la nube de puntos (x, P) deberia formar una recta. Como "
-          "no se conoce, se invierte el problema: se barre una malla de "
-          "%d candidatos sobre el area y para cada uno se ajusta esa recta "
-          "por minimos cuadrados. El candidato con mayor R^2 y pendiente "
-          "fisicamente plausible seria la posicion del emisor."
-          % (PASO_MALLA * PASO_MALLA))
-        a("")
-        a("| Canal | R^2 del mejor ajuste | n ajustado | n sin restringir | Resultado |")
-        a("|---|---|---|---|---|")
-        for f in fuentes:
-            a("| %s | %.3f | %.2f | %+.2f | %s |"
-              % (f["canal"], f["tri_r2"], f["tri_n"], f["tri_n_libre"],
-                 "localizado" if f["tri_concluyente"] else "**no concluyente**"))
+        a("## 8. Bonificación: origen de la contaminación")
         a("")
         max_r2 = max(f["tri_r2"] for f in fuentes)
-        negativos = [f for f in fuentes if f["tri_n_libre"] < 0]
-        bajo_minimo = [f for f in fuentes
-                       if 0 <= f["tri_n_libre"] < N_MIN]
-        a("**El metodo falla en los cuatro canales.** El criterio principal "
-          "es el ajuste: el mejor R^2 obtenido es %.3f, muy por debajo del "
-          "%.2f exigido para aceptar una localizacion. Con ajustes tan "
-          "pobres, la coordenada que devuelve el optimizador no tiene "
-          "significado fisico."
-          % (max_r2, R2_CONCLUYENTE))
-        a("")
-        a("La cuarta columna refuerza el diagnostico. Al liberar la "
-          "restriccion sobre la pendiente:")
-        a("")
-        if negativos:
-            a("- En %s el optimo global tiene pendiente **negativa** (%s), lo "
-              "que implicaria que la potencia *aumenta* con la distancia al "
-              "punto hallado. Es imposible para una fuente: el optimizador "
-              "esta localizando un minimo de campo, no un emisor."
-              % (", ".join("canal %s" % f["canal"] for f in negativos),
-                 ", ".join("%+.2f" % f["tri_n_libre"] for f in negativos)))
-        if bajo_minimo:
-            a("- En %s la pendiente cae por debajo de %.1f (%s), es decir "
-              "una atenuacion mas lenta que en espacio libre. Tampoco "
-              "describe propagacion real desde un emisor."
-              % (", ".join("canal %s" % f["canal"] for f in bajo_minimo),
-                 N_MIN,
-                 ", ".join("%+.2f" % f["tri_n_libre"] for f in bajo_minimo)))
-        restantes = [f for f in fuentes
-                     if f not in negativos and f not in bajo_minimo]
-        if restantes:
-            a("- En %s la pendiente si es fisicamente admisible (%s), pero "
-              "el ajuste sigue siendo demasiado debil (R^2 = %s) para "
-              "sostener una localizacion."
-              % (", ".join("canal %s" % f["canal"] for f in restantes),
-                 ", ".join("%.2f" % f["tri_n_libre"] for f in restantes),
-                 ", ".join("%.3f" % f["tri_r2"] for f in restantes)))
-        a("")
-        a("Causas identificadas:")
-        a("")
-        a("1. **No hay un emisor, hay decenas.** Una banda celular la sirven "
-          "multiples estaciones base repartidas por la ciudad; el campo "
-          "agregado no decae desde un punto unico.")
-        a("2. **La geometria del muestreo es degenerada.** El recorrido es "
-          "practicamente un corredor lineal a lo largo del valle, y para "
-          "trilaterar se requiere observar la fuente desde angulos "
-          "diversos.")
-        a("3. **El sombreado urbano domina la senal de distancia.** La "
-          "potencia de un mismo canal varia mas de %.0f dB entre los "
-          "puntos del recorrido, un rango atribuible a edificaciones y "
-          "topografia que enmascara por completo la atenuacion por "
-          "distancia."
-          % min(f["dinamica_db"] for f in fuentes))
+        negativos = [f["canal"] for f in fuentes if f["tri_n_libre"] < 0]
+        sep_eb = distancia_haversine_km(ESTACIONES_BASE[0]["lat"], ESTACIONES_BASE[0]["lon"],
+                                        ESTACIONES_BASE[1]["lat"], ESTACIONES_BASE[1]["lon"])
+        a("El primer intento fue la trilateración: suponer un único emisor "
+          "cuya potencia cae con el logaritmo de la distancia y buscar, en "
+          "una malla sobre la ciudad, el punto que mejor explica las %d "
+          "mediciones. No funcionó en ningún canal: el mejor ajuste explica "
+          "el %.0f%% de la variación, lejos del %.0f%% exigido%s. La razón es "
+          "que no hay un emisor sino varios, y en este recorrido se "
+          "identificaron dos estaciones base a %.1f km una de otra. A eso se "
+          "suma que la ruta es casi una línea, lo que impide ver la fuente "
+          "desde ángulos distintos, y que los edificios hacen variar la "
+          "potencia más de %.0f dB entre puntos."
+          % (fuentes[0]["n_usados"], 100 * max_r2, 100 * R2_CONCLUYENTE,
+             (", y en %s el ajuste indica que la potencia crecería con la "
+              "distancia" % ("los canales " + ", ".join(negativos)
+                              if len(negativos) > 1 else "el canal " + negativos[0]))
+             if negativos else "",
+             sep_eb, min(f["dinamica_db"] for f in fuentes)))
         a("")
 
-        # ---- metodo 2
-        a("### Metodo 2: centroide ponderado del decil superior")
+        utiles = np.array([q == "buena" for q in calidad])
+        movs = []
+        for c in CANALES:
+            args = (lat[utiles], lon[utiles], p_media[c][utiles])
+            ref = zona_incidencia(*args)
+            for fr in (0.15, 0.20, 0.25, 0.33, 0.50):
+                z = zona_incidencia(*args, fraccion=fr)
+                movs.append(distancia_haversine_km(ref["lat"], ref["lon"], z["lat"], z["lon"]))
+        a("Se usó entonces un estimador más simple: el centro de las %d "
+          "mediciones más fuertes de cada canal (el %.0f%% superior), "
+          "ponderado por su potencia en mW. No localiza una antena, sino la "
+          "zona desde donde llega la energía dominante. Los centros obtenidos "
+          "son %s. El resultado no depende del tamaño del grupo: con entre el "
+          "15%% y el 50%% de las mediciones ningún centro se mueve más de "
+          "%.1f km, porque en escala lineal los puntos débiles casi no pesan."
+          % (fuentes[0]["n_puntos"], 100 * FRACCION_DECIL,
+             "; ".join("canal %s en %.5f, %.5f" % (f["canal"], f["lat"], f["lon"])
+                       for f in fuentes),
+             max(movs)))
         a("")
-        a("Ante la falla del metodo 1 se adopta un estimador mas modesto "
-          "pero sostenible: se toman las %d mediciones del decil de mayor "
-          "potencia de cada canal y se calcula su centroide ponderado por "
-          "potencia en escala **lineal** (mW), no en dBm, por la misma razon "
-          "expuesta en la seccion 6."
-          % fuentes[0]["n_puntos"])
-        a("")
-        a("Esto **no localiza un transmisor**: delimita la zona de maxima "
-          "incidencia, es decir hacia donde se concentra la energia "
-          "dominante vista desde el corredor recorrido.")
-        a("")
-        a("| Canal | Centro estimado | Radio medio | Radio maximo | Separacion al decil debil | Dinamica |")
-        a("|---|---|---|---|---|---|")
+
         for f in fuentes:
-            a("| **%s** | %.5f, %.5f | %.2f km | %.2f km | %.2f km | %.1f dB |"
-              % (f["canal"], f["lat"], f["lon"], f["radio_km"],
-                 f["radio_max_km"], f["separacion_km"], f["dinamica_db"]))
+            f["_dist_eb"] = [distancia_haversine_km(eb["lat"], eb["lon"], f["lat"], f["lon"])
+                             for eb in ESTACIONES_BASE]
+        cerca = min(fuentes, key=lambda f: min(f["_dist_eb"]))
+        k0 = int(np.argmin(cerca["_dist_eb"]))
+        apuntan = [f for f in fuentes if f is not cerca and min(f["_dist_eb"]) < 1.0]
+        mezcla = [f for f in fuentes if min(f["_dist_eb"]) >= 1.0]
+        texto = ("Las estaciones base verificadas en campo validan el método. "
+                 "El centro del canal %s queda a %.0f m de la antena %s, "
+                 "prácticamente sobre ella."
+                 % (cerca["canal"], 1000 * min(cerca["_dist_eb"]),
+                    "de Guayabal" if k0 == 0 else "Sur"))
+        if apuntan:
+            texto += (" Los de %s apuntan a la misma antena, a menos de %.1f km."
+                      % (" y ".join("%s" % f["canal"] for f in apuntan),
+                         max(min(f["_dist_eb"]) for f in apuntan)))
+        if mezcla:
+            texto += (" El del canal %s, en cambio, cae entre las dos antenas, "
+                      "a %s de cada una: ese canal recibe energía de ambas y "
+                      "el promedio las mezcla. Es el límite de este método "
+                      "cuando hay más de un emisor."
+                      % (", ".join(f["canal"] for f in mezcla),
+                         " y ".join("%.1f km" % d for d in mezcla[0]["_dist_eb"])))
+        a(texto)
         a("")
-        sep_min = min(f["separacion_km"] for f in fuentes)
-        sep_max = max(f["separacion_km"] for f in fuentes)
-        a("**Validacion.** Para descartar que el centroide sea un artefacto "
-          "del promedio se calculo tambien el centroide del decil *inferior* "
-          "de cada canal. Ambos quedan separados entre %.2f y %.2f km, lo "
-          "que confirma la existencia de un gradiente espacial real: las "
-          "mediciones fuertes y las debiles no estan mezcladas, ocupan "
-          "zonas distintas del recorrido." % (sep_min, sep_max))
-        a("")
-        a("Las cuatro zonas convergen en un area comun del sur del "
-          "corredor (latitud %.3f a %.3f, longitud %.3f a %.3f), lo que "
-          "sugiere un foco de emision compartido para toda la banda antes "
-          "que emisores independientes por canal."
-          % (min(f["lat"] for f in fuentes), max(f["lat"] for f in fuentes),
-             min(f["lon"] for f in fuentes), max(f["lon"] for f in fuentes)))
-        a("")
-        a("### Alcance de la estimacion")
-        a("")
-        a("Los radios obtenidos (%.2f a %.2f km) no son un margen de error "
-          "instrumental sino la dispersion real de las mediciones que "
-          "sustentan cada centro. Se reportan explicitamente para que la "
-          "Agencia no interprete estas coordenadas como una localizacion "
-          "puntual. Para localizar emisores con precision util se requeriria "
-          "una campana con geometria de muestreo bidimensional y, "
-          "preferiblemente, antena directiva con medicion de azimut."
-          % (min(f["radio_km"] for f in fuentes),
-             max(f["radio_km"] for f in fuentes)))
-        a("")
-        a("Los resultados completos, incluidos los diagnosticos del metodo "
-          "1, quedan en `salida/fuentes_estimadas.csv`.")
+        a("Para localizar cada emisor con precisión haría falta un recorrido "
+          "que rodee las zonas de mayor potencia, en lugar de atravesarlas, "
+          "y una antena directiva que mida desde qué dirección llega la señal.")
         a("")
 
-    with open(ruta, "w") as fo:
+    with open(ruta, "w", encoding="utf-8") as fo:
         fo.write("\n".join(L) + "\n")
 
 
