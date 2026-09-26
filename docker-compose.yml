@@ -1,0 +1,10 @@
+# Un solo comando en el servidor:  docker compose up -d --build
+# Publica el dashboard en el puerto 80 y lo reinicia si la maquina se
+# reinicia o el proceso cae.
+services:
+  dashboard:
+    build: .
+    image: iot-examen03-dashboard
+    ports:
+      - "80:8050"
+    restart: unless-stopped

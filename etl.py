@@ -18,7 +18,7 @@ El script hace las tres etapas y deja todo en salida/:
     LOAD       escribe indicadores.csv + espectro_limpio.npy + el reporte
 
 Al final invoca fuentes.py para la estimacion de origen (bonificacion) e
-incorpora sus resultados como seccion 9 del reporte, de modo que una sola
+incorpora sus resultados como seccion 8 del reporte, de modo que una sola
 corrida produce el informe completo:
 
     python3 etl.py                    ->  salida/reporte_calidad.md
@@ -41,8 +41,9 @@ CARPETA_MEDIDAS = os.path.join(AQUI, "medidas_2026_20")
 CARPETA_SALIDA = os.path.join(AQUI, "salida")
 
 # Capturar solo los archivos de la serie: 001.txt .. 061.txt. Quedan por fuera
-# medidaprueba.txt y medidapureba2.txt (ensayos del operador, con GPS en cero
-# o fuera de Medellín) y ANTENNA1.csv (barrido S11 de la antena, otro formato)
+# medidaprueba.txt (ensayo del operador sin fix de GPS), medidapureba2.txt
+# (ensayo a ~0.5 km del punto de partida, con el equipo aun frio: 38.1 C) y
+# ANTENNA1.csv (barrido S11 de la antena, otro formato)
 PATRON_MEDIDA = re.compile(r"^\d{3}\.txt$")
 
 N_BINS = 1024              # tamaño de la FFT que usó el flowgraph de GNU Radio
@@ -92,7 +93,7 @@ GANANCIA_RECEPTOR_DB = 40
 
 # Estaciones base identificadas en Google Street View junto a las dos zonas
 # de mayor potencia del recorrido. No salen del dataset: son la verificacion
-# en campo de lo que senalan los datos (secciones 2 y 9 del reporte).
+# externa de lo que senalan los datos (secciones 1 y 8 del reporte).
 ESTACIONES_BASE = [
     dict(nombre="Guayabal", lat=6.201370, lon=-75.584742),
     dict(nombre="Sur", lat=6.168150, lon=-75.608361),
@@ -193,7 +194,7 @@ def auditar(nombres, espectro, temp, lon, lat, alt, hdop):
 
         # --- Piso de ruido: espectro valido pero no representativo. No se
         # corrige ni se descarta; se marca para que los estadisticos del
-        # sistema no dependan de el (ver seccion 7 del reporte).
+        # sistema no dependan de el (secciones 1, 5 y 6 del reporte).
         exceso = float(pisos[i]) - piso_tipico
         if exceso > MARGEN_PISO_ANOMALO_DB:
             hallazgos.append(dict(archivo=nombre, indice=i, campo="piso_ruido",
@@ -445,7 +446,7 @@ def escribir_reporte(ruta, ctx):
       "puntos, y es el recomendado para nuevas asignaciones. La frecuencia "
       "más contaminada del sistema es %.3f MHz y la más limpia %.3f MHz. "
       "Las dos zonas de mayor potencia coinciden con estaciones base "
-      "celulares verificadas en campo."
+      "celulares ubicadas en Google Street View."
       % (n, ctx["recorrido_km"], peor, banda(peor), UMBRAL_OCUPACION_DBM,
          100.0 * ocup(peor) / n, mejor, banda(mejor), 100.0 * ocup(mejor) / n,
          frec[bp] / 1e6, frec[bm] / 1e6))
@@ -460,9 +461,11 @@ def escribir_reporte(ruta, ctx):
       "altura y error de distancia del GPS. Todos tienen la estructura "
       "correcta y ninguno de los %d valores de potencia es nulo, infinito o "
       "está fuera del rango físico del receptor. Se dejaron fuera de la serie "
-      "tres archivos que no son mediciones del recorrido: medidaprueba.txt y "
-      "medidapureba2.txt, ensayos del operador con GPS en cero o fuera de la "
-      "ciudad, y ANTENNA1.csv, la caracterización de la antena."
+      "tres archivos que no son mediciones del recorrido: medidaprueba.txt, un "
+      "ensayo del operador sin señal GPS; medidapureba2.txt, otro ensayo "
+      "tomado a unos 0.5 km del punto de partida con el equipo todavía frío "
+      "(38.1 °C, por debajo de toda la serie), y ANTENNA1.csv, la "
+      "caracterización de la antena."
       % (n, nombres[-1], N_COLUMNAS, N_BINS, ANCHO_BIN_HZ / 1e3, n * N_BINS))
     a("")
 
@@ -498,8 +501,8 @@ def escribir_reporte(ruta, ctx):
 
     if anomalas and len(cercania) >= 2:
         g, s = cercania[0], cercania[1]
-        a("La causa del piso anómalo se verificó en campo. En Google Street "
-          "View hay una estación base celular (%.6f, %.6f) a %.0f m de %s; "
+        a("La causa del piso anómalo se verificó con Google Street View: "
+          "hay una estación base celular (%.6f, %.6f) a %.0f m de %s; "
           "ninguna otra medición pasó a menos de %.0f m de ella. El receptor "
           "operó con ganancia fija de %d dB, sin control automático, y al "
           "pasar al pie de la antena se saturó. Una segunda estación (%.6f, "
@@ -631,13 +634,15 @@ def escribir_reporte(ruta, ctx):
       "media geométrica y escondería los picos: con ese atajo, %d de las %d "
       "combinaciones de medición y canal pasarían de ocupadas a libres%s. "
       "Se usa la potencia media y no la total porque sumar %d valores añade "
-      "%.0f dB por pura aritmética y dejaría todos los canales por encima del "
-      "umbral."
+      "%.0f dB por pura aritmética y pondría sobre el umbral %d de las %d "
+      "combinaciones."
       % (BINS_POR_CANAL, BINS_POR_CANAL, UMBRAL_OCUPACION_DBM, cambios,
          n * len(CANALES),
          (", y en el peor caso (%s, canal %s) el error llega a %.0f dB"
           % (peor_caso[1], peor_caso[2], peor_caso[0])) if peor_caso else "",
-         BINS_POR_CANAL, offset))
+         BINS_POR_CANAL, offset,
+         sum(int(np.sum(p_total[c] > UMBRAL_OCUPACION_DBM)) for c in CANALES),
+         n * len(CANALES)))
     a("")
 
     columna_sin = anom.any()
@@ -768,11 +773,23 @@ def escribir_reporte(ruta, ctx):
                   else "%d de sus %d puntos ocupados" % (compartidos, ocup(c))),
                  otro))
         else:
+            # B y D limitan los dos con C, asi que la vecindad no los
+            # distingue: lo que los separa es la potencia con que estan
+            # ocupados, con y sin la medicion saturada.
+            otro = [x for x in otros if x != c][0]
+            dif = glob(p_media[c]) - glob(p_media[otro])
+            dif_sin = glob(p_media[c][~anom]) - glob(p_media[otro][~anom])
             a("- **Canal %s (%s): no recomendado para despliegues nuevos sin "
-              "coordinación.** Está ocupado en el %.0f%% de los puntos, tiene "
-              "la segunda potencia más alta de la banda y limita con el canal "
-              "%s, con riesgo de interferencia de canal adyacente."
-              % (c, banda(c), 100.0 * ocup(c) / n, peor))
+              "coordinación.** Está ocupado en el %.0f%% de los puntos, poco "
+              "más que el %s, pero con más fuerza: su potencia media es %.1f "
+              "dBm, la segunda más alta de la banda y %.1f dB por encima de la "
+              "del %s%s. Los dos limitan con el canal %s, así que lo que los "
+              "separa es esa diferencia de potencia."
+              % (c, banda(c), 100.0 * ocup(c) / n, otro, glob(p_media[c]),
+                 dif, otro,
+                 (" (%.1f dB sin la medición saturada)" % dif_sin)
+                 if anom.any() else "",
+                 peor))
     a("- **Canal %s (%s): no asignar.** Está ocupado en el %.0f%% del "
       "recorrido; cualquier asignación nueva sufriría interferencia en "
       "prácticamente toda el área medida."
@@ -797,10 +814,12 @@ def escribir_reporte(ruta, ctx):
         negativos = [f["canal"] for f in fuentes if f["tri_n_libre"] < 0]
         sep_eb = distancia_haversine_km(ESTACIONES_BASE[0]["lat"], ESTACIONES_BASE[0]["lon"],
                                         ESTACIONES_BASE[1]["lat"], ESTACIONES_BASE[1]["lon"])
-        a("El primer intento fue la trilateración: suponer un único emisor "
-          "cuya potencia cae con el logaritmo de la distancia y buscar, en "
-          "una malla sobre la ciudad, el punto que mejor explica las %d "
-          "mediciones. No funcionó en ningún canal: el mejor ajuste explica "
+        a("La estimación por extrapolación que pide el enunciado es la "
+          "trilateración: suponer un único emisor cuya potencia cae con el "
+          "logaritmo de la distancia y extender ese modelo más allá de la "
+          "ruta, buscando en una malla sobre la ciudad el punto que mejor "
+          "explica las %d mediciones. No funcionó en ningún canal: el mejor "
+          "ajuste explica "
           "el %.0f%% de la variación, lejos del %.0f%% exigido%s. La razón es "
           "que no hay un emisor sino varios, y en este recorrido se "
           "identificaron dos estaciones base a %.1f km una de otra. A eso se "
@@ -823,7 +842,8 @@ def escribir_reporte(ruta, ctx):
             for fr in (0.15, 0.20, 0.25, 0.33, 0.50):
                 z = zona_incidencia(*args, fraccion=fr)
                 movs.append(distancia_haversine_km(ref["lat"], ref["lon"], z["lat"], z["lon"]))
-        a("Se usó entonces un estimador más simple: el centro de las %d "
+        a("Se usó entonces un estimador más simple, que ya no extrapola "
+          "sino que interpola entre los puntos medidos: el centro de las %d "
           "mediciones más fuertes de cada canal (el %.0f%% superior), "
           "ponderado por su potencia en mW. No localiza una antena, sino la "
           "zona desde donde llega la energía dominante. Los centros obtenidos "
@@ -843,7 +863,7 @@ def escribir_reporte(ruta, ctx):
         k0 = int(np.argmin(cerca["_dist_eb"]))
         apuntan = [f for f in fuentes if f is not cerca and min(f["_dist_eb"]) < 1.0]
         mezcla = [f for f in fuentes if min(f["_dist_eb"]) >= 1.0]
-        texto = ("Las estaciones base verificadas en campo validan el método. "
+        texto = ("Las estaciones base ubicadas en Street View validan el método. "
                  "El centro del canal %s queda a %.0f m de la antena %s, "
                  "prácticamente sobre ella."
                  % (cerca["canal"], 1000 * min(cerca["_dist_eb"]),
@@ -853,9 +873,10 @@ def escribir_reporte(ruta, ctx):
                       % (" y ".join("%s" % f["canal"] for f in apuntan),
                          max(min(f["_dist_eb"]) for f in apuntan)))
         if mezcla:
-            texto += (" El del canal %s, en cambio, cae entre las dos antenas, "
-                      "a %s de cada una: ese canal recibe energía de ambas y "
-                      "el promedio las mezcla. Es el límite de este método "
+            texto += (" El del canal %s, en cambio, cae entre las dos antenas "
+                      "conocidas, a %s de cada una: ese canal recibe energía "
+                      "de varias fuentes y el promedio las mezcla. Es el "
+                      "límite de este método "
                       "cuando hay más de un emisor."
                       % (", ".join(f["canal"] for f in mezcla),
                          " y ".join("%.1f km" % d for d in mezcla[0]["_dist_eb"])))

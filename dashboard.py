@@ -11,11 +11,15 @@ Medellin:
     - Zona estimada de la fuente de contaminacion (bonificacion)
 
 Consume lo que dejo etl.py en salida/. No recalcula nada: si hace falta
-regenerar los indicadores hay que correr primero `python3 etl.py` y luego
-`python fuentes.py`.
+regenerar los indicadores hay que correr primero `python3 etl.py`, que a su
+vez corre la estimacion de fuentes.
 
 Uso:
     .venv/bin/python dashboard.py        ->  http://127.0.0.1:8050
+    docker compose up -d --build         ->  http://<servidor>/  (gunicorn)
+
+HOST y PORT se pueden cambiar por variables de entorno. En el contenedor lo
+sirve gunicorn a traves de `server`, no app.run().
 """
 
 import csv
@@ -361,6 +365,8 @@ banda_de = {c: "%.0f-%.0f MHz" % (
     for c, (ini, fin) in CANALES.items()}
 
 app = Dash(__name__, title="Ocupacion de espectro 840-860 MHz")
+# Aplicacion WSGI (Flask) que sirve gunicorn en el contenedor.
+server = app.server
 
 # html y body traen fondo blanco por defecto y asoma por los bordes al hacer
 # scroll. Se fija aqui porque el estilo del layout solo cubre su propio div.
@@ -659,4 +665,5 @@ def actualizar(clave_capa, opciones, radio, click):
 
 
 if __name__ == "__main__":
-    app.run(debug=False, host="127.0.0.1", port=8050)
+    app.run(debug=False, host=os.environ.get("HOST", "127.0.0.1"),
+            port=int(os.environ.get("PORT", "8050")))
