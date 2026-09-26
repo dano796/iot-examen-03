@@ -400,8 +400,8 @@ app.layout = html.Div([
         html.Div([
             "Estudio tecnico para la ",
             html.B("Agencia Nacional del Espectro"),
-            " sobre la contaminacion de la banda celular en el sector "
-            "occidental de Medellin. Una estacion movil de monitoreo "
+            " sobre la contaminacion de la banda celular en Medellin. "
+            "Una estacion movil de monitoreo "
             "(receptor USRP + GPS) se detuvo en ",
             html.B("%d puntos" % len(D["lat"])),
             " y en cada uno midio los 20 MHz completos divididos en 1024 "

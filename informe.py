@@ -41,7 +41,7 @@ EVALUACION = "Examen / Trabajo 3 - ETL y toma de decisiones"
 FECHA_ENTREGA = "28 de septiembre de 2026"
 
 TITULO = "Analisis de ocupacion del espectro radioelectrico"
-SUBTITULO = ("Banda 840 - 860 MHz, sector occidental de Medellin<br>"
+SUBTITULO = ("Banda 840 - 860 MHz, Medellin<br>"
              "Estudio tecnico para la Agencia Nacional del Espectro")
 
 RUTA_MD = os.path.join(CARPETA_SALIDA, "reporte_calidad.md")
