@@ -1,7 +1,7 @@
 # Ocupacion de espectro 840 - 860 MHz
 
 Analisis de contaminacion del espectro radioelectrico en la banda celular de
-840 a 860 MHz, sector occidental de Medellin, a partir de 61 mediciones
+840 a 860 MHz en Medellin, a partir de 61 mediciones
 tomadas con una estacion movil de monitoreo (USRP + GNU Radio + GPS).
 
 Examen 3 de Internet de las Cosas — Universidad Pontificia Bolivariana.

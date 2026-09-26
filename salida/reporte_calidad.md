@@ -1,8 +1,8 @@
-# Ocupación del espectro 840–860 MHz en el occidente de Medellín
+# Ocupación del espectro 840–860 MHz en Medellín
 
 ## Resumen
 
-Se analizaron 61 mediciones de espectro tomadas por una estación móvil a lo largo de 26.2 km del occidente de Medellín. La banda está contaminada de forma desigual: el canal C (850–855 MHz) supera el umbral de -60 dBm en el 87% del recorrido y no debe asignarse, mientras que el canal A (840–845 MHz) es el más limpio, con ocupación en el 25% de los puntos, y es el recomendado para nuevas asignaciones. La frecuencia más contaminada del sistema es 853.145 MHz y la más limpia 843.613 MHz. Las dos zonas de mayor potencia coinciden con estaciones base celulares ubicadas en Google Street View.
+Se analizaron 61 mediciones de espectro tomadas por una estación móvil a lo largo de un recorrido de 26.2 km por Medellín. La banda está contaminada de forma desigual: el canal C (850–855 MHz) supera el umbral de -60 dBm en el 87% del recorrido y no debe asignarse, mientras que el canal A (840–845 MHz) es el más limpio, con ocupación en el 25% de los puntos, y es el recomendado para nuevas asignaciones. La frecuencia más contaminada del sistema es 853.145 MHz y la más limpia 843.613 MHz. Las dos zonas de mayor potencia coinciden con estaciones base celulares ubicadas en Google Street View.
 
 ## 1. Calidad de los datos
 
@@ -30,7 +30,7 @@ Las otras dos mediciones con problemas no se imputan. La de HDOP alto tiene una 
 
 ## 3. Ruta de la estación móvil
 
-El orden de los archivos es el orden del recorrido, lo que permite reconstruir la ruta sin marcas de tiempo. La estación hizo un circuito de 26.2 km: salió del norte del sector (001.txt, 6.24326, -75.58667), bajó hasta el punto más al sur en 027.txt (6.15801, -75.60950) y regresó hacia el norte por un trazado más oriental hasta 061.txt. La altura varió entre 1499 y 1590 m.
+El orden de los archivos es el orden del recorrido, lo que permite reconstruir la ruta sin marcas de tiempo. La estación hizo un circuito de 26.2 km: salió del extremo norte del recorrido (001.txt, 6.24326, -75.58667), bajó hasta el punto más al sur en 027.txt (6.15801, -75.60950) y regresó hacia el norte por un trazado más oriental hasta 061.txt. La altura varió entre 1499 y 1590 m.
 
 ![Recorrido de la estación móvil](graficas/04_ruta.png)
 
@@ -84,7 +84,7 @@ Con base en la ocupación medida en los 61 puntos del recorrido, se recomienda a
 - **Canal B (845–850 MHz): no recomendado para despliegues nuevos sin coordinación.** Está ocupado en el 33% de los puntos, poco más que el D, pero con más fuerza: su potencia media es -36.9 dBm, la segunda más alta de la banda y 7.6 dB por encima de la del D (11.3 dB sin la medición saturada). Los dos limitan con el canal C, así que lo que los separa es esa diferencia de potencia.
 - **Canal C (850–855 MHz): no asignar.** Está ocupado en el 87% del recorrido; cualquier asignación nueva sufriría interferencia en prácticamente toda el área medida.
 
-Dentro del plan, conviene evitar la vecindad de 853.145 MHz y usar 843.613 MHz como referencia de piso de ruido en futuras campañas. El estudio tiene dos límites: cubre 26.2 km del occidente de la ciudad y no es extrapolable al resto del Valle de Aburrá, y son mediciones puntuales a lo largo de un recorrido, que no capturan la variación de la ocupación según la hora.
+Dentro del plan, conviene evitar la vecindad de 853.145 MHz y usar 843.613 MHz como referencia de piso de ruido en futuras campañas. El estudio tiene dos límites: cubre un recorrido de 26.2 km por la ciudad y no es extrapolable al resto del Valle de Aburrá, y son mediciones puntuales a lo largo de un recorrido, que no capturan la variación de la ocupación según la hora.
 
 ## 8. Bonificación: origen de la contaminación
 

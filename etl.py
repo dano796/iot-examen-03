@@ -1,7 +1,7 @@
 """ETL de la medida de ocupacion de espectro 840-860 MHz (Examen 03).
 
 Fuente: 61 archivos .txt en medidas_2026_20/, cada uno una medicion puntual
-tomada por una estacion movil (USRP + GNU Radio + GPS) en el occidente de
+tomada por una estacion movil (USRP + GNU Radio + GPS) en un recorrido por
 Medellin. Cada archivo es UNA fila CSV de 1029 valores:
 
     [0..1023]  espectro en dBm, 840 MHz -> 860 MHz (1024 bins de la FFT)
@@ -432,14 +432,14 @@ def escribir_reporte(ruta, ctx):
         cercania.append(dict(eb=eb, i=int(i1), d_m=1000 * d[i1],
                              j=int(i2), d2_m=1000 * d[i2]))
 
-    a("# Ocupación del espectro 840–860 MHz en el occidente de Medellín")
+    a("# Ocupación del espectro 840–860 MHz en Medellín")
     a("")
 
     # ------------------------------------------------------------- resumen
     a("## Resumen")
     a("")
     a("Se analizaron %d mediciones de espectro tomadas por una estación móvil "
-      "a lo largo de %.1f km del occidente de Medellín. La banda está "
+      "a lo largo de un recorrido de %.1f km por Medellín. La banda está "
       "contaminada de forma desigual: el canal %s (%s) supera el umbral de "
       "%.0f dBm en el %.0f%% del recorrido y no debe asignarse, mientras que "
       "el canal %s (%s) es el más limpio, con ocupación en el %.0f%% de los "
@@ -575,7 +575,7 @@ def escribir_reporte(ruta, ctx):
     a("")
     a("El orden de los archivos es el orden del recorrido, lo que permite "
       "reconstruir la ruta sin marcas de tiempo. La estación hizo un "
-      "circuito de %.1f km: salió del norte del sector (%s, %.5f, %.5f), "
+      "circuito de %.1f km: salió del extremo norte del recorrido (%s, %.5f, %.5f), "
       "bajó hasta el punto más al sur en %s (%.5f, %.5f) y regresó hacia el "
       "norte por un trazado más oriental hasta %s. La altura varió entre "
       "%.0f y %.0f m."
@@ -797,7 +797,7 @@ def escribir_reporte(ruta, ctx):
     a("")
     a("Dentro del plan, conviene evitar la vecindad de %.3f MHz y usar %.3f "
       "MHz como referencia de piso de ruido en futuras campañas. El estudio "
-      "tiene dos límites: cubre %.1f km del occidente de la ciudad y no es "
+      "tiene dos límites: cubre un recorrido de %.1f km por la ciudad y no es "
       "extrapolable al resto del Valle de Aburrá, y son mediciones puntuales "
       "a lo largo de un recorrido, que no capturan la variación de la "
       "ocupación según la hora."
