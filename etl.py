@@ -41,8 +41,9 @@ CARPETA_MEDIDAS = os.path.join(AQUI, "medidas_2026_20")
 CARPETA_SALIDA = os.path.join(AQUI, "salida")
 
 # Capturar solo los archivos de la serie: 001.txt .. 061.txt. Quedan por fuera
-# medidaprueba.txt y medidapureba2.txt (ensayos del operador, con GPS en cero
-# o fuera de Medellín) y ANTENNA1.csv (barrido S11 de la antena, otro formato)
+# medidaprueba.txt (ensayo del operador sin fix de GPS), medidapureba2.txt
+# (ensayo a ~0.5 km del punto de partida, con el equipo aun frio: 38.1 C) y
+# ANTENNA1.csv (barrido S11 de la antena, otro formato)
 PATRON_MEDIDA = re.compile(r"^\d{3}\.txt$")
 
 N_BINS = 1024              # tamaño de la FFT que usó el flowgraph de GNU Radio
@@ -92,7 +93,7 @@ GANANCIA_RECEPTOR_DB = 40
 
 # Estaciones base identificadas en Google Street View junto a las dos zonas
 # de mayor potencia del recorrido. No salen del dataset: son la verificacion
-# en campo de lo que senalan los datos (secciones 2 y 9 del reporte).
+# externa de lo que senalan los datos (secciones 1 y 8 del reporte).
 ESTACIONES_BASE = [
     dict(nombre="Guayabal", lat=6.201370, lon=-75.584742),
     dict(nombre="Sur", lat=6.168150, lon=-75.608361),
@@ -445,7 +446,7 @@ def escribir_reporte(ruta, ctx):
       "puntos, y es el recomendado para nuevas asignaciones. La frecuencia "
       "más contaminada del sistema es %.3f MHz y la más limpia %.3f MHz. "
       "Las dos zonas de mayor potencia coinciden con estaciones base "
-      "celulares verificadas en campo."
+      "celulares ubicadas en Google Street View."
       % (n, ctx["recorrido_km"], peor, banda(peor), UMBRAL_OCUPACION_DBM,
          100.0 * ocup(peor) / n, mejor, banda(mejor), 100.0 * ocup(mejor) / n,
          frec[bp] / 1e6, frec[bm] / 1e6))
@@ -460,9 +461,11 @@ def escribir_reporte(ruta, ctx):
       "altura y error de distancia del GPS. Todos tienen la estructura "
       "correcta y ninguno de los %d valores de potencia es nulo, infinito o "
       "está fuera del rango físico del receptor. Se dejaron fuera de la serie "
-      "tres archivos que no son mediciones del recorrido: medidaprueba.txt y "
-      "medidapureba2.txt, ensayos del operador con GPS en cero o fuera de la "
-      "ciudad, y ANTENNA1.csv, la caracterización de la antena."
+      "tres archivos que no son mediciones del recorrido: medidaprueba.txt, un "
+      "ensayo del operador sin señal GPS; medidapureba2.txt, otro ensayo "
+      "tomado a unos 0.5 km del punto de partida con el equipo todavía frío "
+      "(38.1 °C, por debajo de toda la serie), y ANTENNA1.csv, la "
+      "caracterización de la antena."
       % (n, nombres[-1], N_COLUMNAS, N_BINS, ANCHO_BIN_HZ / 1e3, n * N_BINS))
     a("")
 
@@ -498,8 +501,8 @@ def escribir_reporte(ruta, ctx):
 
     if anomalas and len(cercania) >= 2:
         g, s = cercania[0], cercania[1]
-        a("La causa del piso anómalo se verificó en campo. En Google Street "
-          "View hay una estación base celular (%.6f, %.6f) a %.0f m de %s; "
+        a("La causa del piso anómalo se verificó con Google Street View: "
+          "hay una estación base celular (%.6f, %.6f) a %.0f m de %s; "
           "ninguna otra medición pasó a menos de %.0f m de ella. El receptor "
           "operó con ganancia fija de %d dB, sin control automático, y al "
           "pasar al pie de la antena se saturó. Una segunda estación (%.6f, "
@@ -631,13 +634,15 @@ def escribir_reporte(ruta, ctx):
       "media geométrica y escondería los picos: con ese atajo, %d de las %d "
       "combinaciones de medición y canal pasarían de ocupadas a libres%s. "
       "Se usa la potencia media y no la total porque sumar %d valores añade "
-      "%.0f dB por pura aritmética y dejaría todos los canales por encima del "
-      "umbral."
+      "%.0f dB por pura aritmética y pondría sobre el umbral %d de las %d "
+      "combinaciones."
       % (BINS_POR_CANAL, BINS_POR_CANAL, UMBRAL_OCUPACION_DBM, cambios,
          n * len(CANALES),
          (", y en el peor caso (%s, canal %s) el error llega a %.0f dB"
           % (peor_caso[1], peor_caso[2], peor_caso[0])) if peor_caso else "",
-         BINS_POR_CANAL, offset))
+         BINS_POR_CANAL, offset,
+         sum(int(np.sum(p_total[c] > UMBRAL_OCUPACION_DBM)) for c in CANALES),
+         n * len(CANALES)))
     a("")
 
     columna_sin = anom.any()
@@ -843,7 +848,7 @@ def escribir_reporte(ruta, ctx):
         k0 = int(np.argmin(cerca["_dist_eb"]))
         apuntan = [f for f in fuentes if f is not cerca and min(f["_dist_eb"]) < 1.0]
         mezcla = [f for f in fuentes if min(f["_dist_eb"]) >= 1.0]
-        texto = ("Las estaciones base verificadas en campo validan el método. "
+        texto = ("Las estaciones base ubicadas en Street View validan el método. "
                  "El centro del canal %s queda a %.0f m de la antena %s, "
                  "prácticamente sobre ella."
                  % (cerca["canal"], 1000 * min(cerca["_dist_eb"]),
