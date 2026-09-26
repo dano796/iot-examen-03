@@ -10,7 +10,7 @@ Figura obligatoria del enunciado:
         "Grafica de la frecuencia mas contaminada y la menos contaminada
         en todo el sistema"
 
-Figuras de apoyo, para sustentar las secciones 6 y 7 del informe:
+Figuras de apoyo, para sustentar las secciones 3 a 5 del informe:
 
     02_potencia_por_canal.png    comparacion de los cuatro canales
     03_temperatura.png           temperatura vs orden y vs piso de ruido
@@ -231,7 +231,7 @@ def figura_canales(d):
 # --------------------------------------------------------------------------
 
 def figura_temperatura(d):
-    """Sustenta la seccion 6: la temperatura sigue al recorrido, no al lugar."""
+    """Sustenta la seccion 4: la temperatura sigue al recorrido, no al lugar."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.2))
 
     r_orden = correlacion(d["temp"], d["orden"])

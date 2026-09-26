@@ -18,7 +18,7 @@ El script hace las tres etapas y deja todo en salida/:
     LOAD       escribe indicadores.csv + espectro_limpio.npy + el reporte
 
 Al final invoca fuentes.py para la estimacion de origen (bonificacion) e
-incorpora sus resultados como seccion 9 del reporte, de modo que una sola
+incorpora sus resultados como seccion 8 del reporte, de modo que una sola
 corrida produce el informe completo:
 
     python3 etl.py                    ->  salida/reporte_calidad.md
@@ -194,7 +194,7 @@ def auditar(nombres, espectro, temp, lon, lat, alt, hdop):
 
         # --- Piso de ruido: espectro valido pero no representativo. No se
         # corrige ni se descarta; se marca para que los estadisticos del
-        # sistema no dependan de el (ver seccion 7 del reporte).
+        # sistema no dependan de el (secciones 1, 5 y 6 del reporte).
         exceso = float(pisos[i]) - piso_tipico
         if exceso > MARGEN_PISO_ANOMALO_DB:
             hallazgos.append(dict(archivo=nombre, indice=i, campo="piso_ruido",
