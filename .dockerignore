@@ -1,0 +1,9 @@
+# Solo entra a la imagen lo que copia el Dockerfile; salida/ se regenera
+# dentro con etl.py.
+.git
+.venv
+__pycache__
+*.pyc
+capturas/
+salida/
+Examen*.pdf

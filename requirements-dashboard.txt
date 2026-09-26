@@ -1,0 +1,7 @@
+# Dependencias minimas del contenedor del dashboard: el ETL solo necesita
+# numpy, y el dashboard dash + plotly, servido por gunicorn. Las graficas,
+# las capturas y el PDF se generan fuera del contenedor (requirements.txt).
+numpy==2.5.3
+dash==4.4.1
+plotly==7.1.0
+gunicorn==26.2.0

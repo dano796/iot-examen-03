@@ -32,6 +32,7 @@ graficas.py     figuras estaticas del informe
 dashboard.py    servidor web interactivo (Dash + Plotly)
 capturas.py     capturas automaticas de las vistas del dashboard
 informe.py      ensamblado del entregable final en PDF
+Dockerfile      imagen del dashboard para desplegar en un servidor
 
 medidas_2026_20/  dataset original: 001.txt .. 061.txt
 salida/           todo lo generado por el pipeline
@@ -69,6 +70,24 @@ python3 etl.py
 # 5. Entregable final
 .venv/bin/python informe.py
 ```
+
+## Despliegue en un servidor (EC2)
+
+El dashboard se publica con un solo comando. En una instancia EC2 con Docker
+instalado y el puerto 80 abierto en el security group:
+
+```bash
+git clone https://github.com/dano796/iot-examen-03.git
+cd iot-examen-03
+docker compose up -d --build
+```
+
+Queda en `http://<ip-publica-de-la-instancia>/`. La imagen corre `etl.py`
+durante la construccion, asi que no hace falta subir `salida/`: los
+indicadores se regeneran desde el dataset. Lo sirve gunicorn y se reinicia
+solo si la instancia se reinicia.
+
+Para actualizarlo despues de un cambio: `git pull && docker compose up -d --build`.
 
 ## Salidas
 
