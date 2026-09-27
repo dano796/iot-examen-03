@@ -6,6 +6,8 @@ tomadas con una estacion movil de monitoreo (USRP + GNU Radio + GPS).
 
 Examen 3 de Internet de las Cosas — Universidad Pontificia Bolivariana.
 
+**Dashboard publicado:** https://iot-examen-03.onrender.com/
+
 ## Que hace
 
 Un proceso ETL que limpia las mediciones, audita su calidad, imputa lo que
@@ -71,10 +73,23 @@ python3 etl.py
 .venv/bin/python informe.py
 ```
 
-## Despliegue en un servidor (EC2)
+## Despliegue
 
-El dashboard se publica con un solo comando. En una instancia EC2 con Docker
-instalado y el puerto 80 abierto en el security group:
+### Render (despliegue oficial)
+
+El dashboard que se reporta en la entrega corre en Render:
+**https://iot-examen-03.onrender.com/**
+
+Render construye la imagen con el `Dockerfile` directamente desde este
+repositorio de GitHub; con el auto-deploy activo (la opcion por defecto) la
+vuelve a desplegar con cada push a la rama conectada. En el plan gratuito
+el servicio se suspende tras unos minutos sin visitas, asi que la primera
+carga despues de una pausa puede tardar un minuto.
+
+### Servidor propio (EC2)
+
+Alternativa con un solo comando. En una instancia EC2 con Docker instalado y
+el puerto 80 abierto en el security group:
 
 ```bash
 git clone https://github.com/dano796/iot-examen-03.git
@@ -88,6 +103,10 @@ indicadores se regeneran desde el dataset. Lo sirve gunicorn y se reinicia
 solo si la instancia se reinicia.
 
 Para actualizarlo despues de un cambio: `git pull && docker compose up -d --build`.
+
+Si el puerto 80 ya esta ocupado en la instancia, cambia `"80:8050"` por
+`"8080:8050"` en `docker-compose.yml` y abre ese puerto en el security group.
+Si el comando `docker` responde "permission denied", usa `sudo docker ...`.
 
 ## Salidas
 
